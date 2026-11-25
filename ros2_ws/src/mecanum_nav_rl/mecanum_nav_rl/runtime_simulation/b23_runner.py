@@ -2452,6 +2452,7 @@ def verify_r04c_stale_rejection_and_zero(io, *, delayed_delivery_ns,
         and facts.get('steady_ns', 0) >= delayed_delivery_ns), None)
     if rejected is None:
         return None
+    in_flight_policy_applications = []
     if step_index is not None:
         from mecanum_nav_rl_interfaces.msg import CommandEnvelope
         if any(name == 'SAFETY_ACCEPTED'
@@ -2460,12 +2461,40 @@ def verify_r04c_stale_rejection_and_zero(io, *, delayed_delivery_ns,
                 and facts.get('steady_ns', 0) >= delayed_delivery_ns
                 for name, facts in io.events):
             raise RuntimeError('R04c accepted the stale-scan POLICY step after callback delivery')
-        if any(name == 'NATIVE_APPLICATION_JOINED'
+        if any(name == 'policy_final_published'
                 and facts.get('step_index') == step_index
                 and facts.get('source_sequence') == step_index
                 and facts.get('steady_ns', 0) >= delayed_delivery_ns
                 for name, facts in io.events):
-            raise RuntimeError('R04c applied POLICY after stale-scan callback delivery')
+            raise RuntimeError('R04c published POLICY after stale-scan callback delivery')
+        for name, application in io.events:
+            if (name != 'NATIVE_APPLICATION_JOINED'
+                    or application.get('step_index') != step_index
+                    or application.get('source_sequence') != step_index
+                    or type(application.get('steady_ns')) is not int
+                    or application['steady_ns'] < delayed_delivery_ns):
+                continue
+            # A native status can arrive after scan delivery for a receipt that
+            # FinalTwistPublisher emitted beforehand. Bind that in-flight
+            # application to the exact retained publication; do not mistake
+            # observer arrival order for command publication order.
+            publication = next((facts for event_name, facts in reversed(io.events)
+                if event_name == 'policy_final_published'
+                and facts.get('step_index') == step_index
+                and facts.get('source_sequence') == step_index
+                and facts.get('source_instance_id') == application.get('source_instance_id')
+                and facts.get('transition_id') == application.get('transition_id')
+                and facts.get('publish_sequence') == application.get('publish_sequence')
+                and type(facts.get('steady_ns')) is int
+                and facts['steady_ns'] < delayed_delivery_ns), None)
+            if publication is None:
+                raise RuntimeError(
+                    'R04c applied POLICY after stale-scan delivery without an exact pre-delivery publication')
+            in_flight_policy_applications.append({
+                'source_sequence':application['source_sequence'],
+                'publish_sequence':application['publish_sequence'],
+                'publication_steady_ns':publication['steady_ns'],
+                'application_steady_ns':application['steady_ns']})
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     for name, facts in io.events:
         if (name != 'NATIVE_APPLICATION_JOINED'
@@ -2495,6 +2524,8 @@ def verify_r04c_stale_rejection_and_zero(io, *, delayed_delivery_ns,
         return {'case':'R04c','delayed_delivery_ns':delayed_delivery_ns,
             'stale_rejection_reasons':list(rejected.get('reasons', ())),
             'rejected_steady_ns':rejected['steady_ns'],
+            'pre_delivery_policy_applications_observed_after_delivery':
+                in_flight_policy_applications,
             'native_zero_application':applied_zero}
     return None
 

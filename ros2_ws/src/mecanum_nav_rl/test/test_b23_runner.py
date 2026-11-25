@@ -5386,6 +5386,15 @@ def test_r04c_next_policy_slot_requires_stale_scan_rejection_and_applied_zero():
 def test_r04c_stale_callback_requires_production_rejection_and_exact_zero_join():
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     from geometry_msgs.msg import Twist
+    policy = FinalIssuedCommandReceipt()
+    policy.source = FinalIssuedCommandReceipt.SOURCE_POLICY
+    policy.source_instance_id = 71
+    policy.sequence = 2
+    policy.step_index = 2
+    policy.transition_id = 'r04c-step-2'
+    policy.final_publisher_instance_id = 80
+    policy.final_publish_sequence = 98
+    policy.final_command = Twist()
     receipt = FinalIssuedCommandReceipt()
     receipt.source = FinalIssuedCommandReceipt.SOURCE_SAFE_STOP
     receipt.source_instance_id = 70
@@ -5393,25 +5402,44 @@ def test_r04c_stale_callback_requires_production_rejection_and_exact_zero_join()
     receipt.final_publisher_instance_id = 80
     receipt.final_publish_sequence = 99
     receipt.final_command = Twist()
-    joined = {'source_instance_id':70,'source_sequence':9,'step_index':0,
+    policy_application = {'source_instance_id':71,'source_sequence':2,
+        'step_index':2,'transition_id':'r04c-step-2','steady_ns':925,
+        'publish_sequence':98,'iteration':11,'stamp_ns':110_000_000}
+    zero_application = {'source_instance_id':70,'source_sequence':9,'step_index':0,
         'transition_id':'','steady_ns':950,'publish_sequence':99,
         'iteration':12,'stamp_ns':120_000_000}
+    def publication_for_source_sequence(*, source, sequence):
+        if source == FinalIssuedCommandReceipt.SOURCE_SAFE_STOP and sequence == 9:
+            return receipt
+        if source == FinalIssuedCommandReceipt.SOURCE_POLICY and sequence == 2:
+            return policy
+        return None
     io = NS(events=[
         ('B23_R04_DELIVERY_DELAYED_CALLBACK', {'case':'R04c','delivery_ns':800,
             'source_stamp_ns':1_000_000_000}),
         ('SAFETY_REJECTED', {'reasons':['SCAN_STALE_OR_FUTURE'],
             'steady_ns':900,'ros_ns':1_700_000_000}),
-        ('NATIVE_APPLICATION_JOINED', joined),
+        ('policy_final_published', {'source_instance_id':71,'source_sequence':2,
+            'step_index':2,'transition_id':'r04c-step-2','publish_sequence':98,
+            'steady_ns':750,'receipt_cdr_hex':'pinned-publication'}),
+        ('NATIVE_APPLICATION_JOINED', policy_application),
     ], ingress=NS(safe_stop_source_id=70),
        final=NS(publisher_instance_id=80,
-           publication_for_source_sequence=lambda **kwargs: receipt if kwargs == {
-               'source':FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,'sequence':9} else None))
-    result = verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800)
+           publication_for_source_sequence=publication_for_source_sequence))
+    # The receipt was emitted before the injected stale sample. Its later
+    # status arrival is not a late POLICY publication; the verifier still
+    # waits for exact native SAFE_STOP-zero application.
+    assert verify_r04c_stale_rejection_and_zero(
+        io, delayed_delivery_ns=800, step_index=2) is None
+    io.events.append(('NATIVE_APPLICATION_JOINED', zero_application))
+    result = verify_r04c_stale_rejection_and_zero(
+        io, delayed_delivery_ns=800, step_index=2)
     assert result['stale_rejection_reasons'] == ['SCAN_STALE_OR_FUTURE']
     assert result['native_zero_application']['source_sequence'] == 9
     assert result['native_zero_application']['native_application_steady_ns'] == 950
-    io.events.pop()
-    assert verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800) is None
+    assert result['pre_delivery_policy_applications_observed_after_delivery'] == [{
+        'source_sequence':2,'publish_sequence':98,'publication_steady_ns':750,
+        'application_steady_ns':925}]
 
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     io.events.insert(2, ('SAFETY_ACCEPTED', {'candidate_source':CommandEnvelope.SOURCE_POLICY,
@@ -5420,8 +5448,15 @@ def test_r04c_stale_callback_requires_production_rejection_and_exact_zero_join()
         verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800, step_index=2)
     io.events.pop(2)
     io.events.insert(2, ('NATIVE_APPLICATION_JOINED', {'step_index':2,
-        'source_sequence':2,'steady_ns':902}))
-    with pytest.raises(RuntimeError, match='applied POLICY after stale-scan callback'):
+        'source_instance_id':71,'source_sequence':2,'transition_id':'r04c-step-2',
+        'steady_ns':902,'publish_sequence':100}))
+    with pytest.raises(RuntimeError, match='without an exact pre-delivery publication'):
+        verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800, step_index=2)
+    io.events.pop(2)
+    io.events.insert(2, ('policy_final_published', {'source_instance_id':71,
+        'source_sequence':2,'step_index':2,'transition_id':'r04c-step-2',
+        'publish_sequence':100,'steady_ns':850,'receipt_cdr_hex':'late-publication'}))
+    with pytest.raises(RuntimeError, match='published POLICY after stale-scan callback'):
         verify_r04c_stale_rejection_and_zero(io, delayed_delivery_ns=800, step_index=2)
 
 
