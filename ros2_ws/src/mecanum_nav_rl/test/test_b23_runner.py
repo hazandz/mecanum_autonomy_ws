@@ -7064,6 +7064,108 @@ def test_native_ack_reader_retains_partial_and_raw_ownership(native_reader):
     assert value.read_native_input_watermark() == 9
 
 
+def test_native_safe_stop_acceptance_is_bound_to_exact_published_receipt(native_reader):
+    value, path, _record = native_reader
+    receipt = NS(final_publisher_instance_id=55, final_publish_sequence=12,
+        source_sequence=7, publish_stamp_ns=300_000_000)
+    ingress = dict(kind='B23_SAFE_STOP_RECEIPT_INGRESS', run_id='B23_TEST',
+        fields=dict(publisher='55', key='12', source_sequence='7',
+            stamp_ns='300000000', receive_ns='400000000'),
+        server_leader_pid=777, invocation_id='inv-1')
+    accepted = dict(kind='B23_RECEIPT_GATE_RESULT', run_id='B23_TEST',
+        fields=dict(disposition='3', key='12', reason='accepted_once',
+            sim_ns='1190000000', source='4', source_sequence='7', steady_ns='999000000'),
+        server_leader_pid=777, invocation_id='inv-1')
+    path.write_text(json.dumps(ingress) + '\n' + json.dumps(accepted) + '\n')
+    record = value.native_safe_stop_gate_acceptance_for_receipt(receipt)
+    assert record == accepted
+
+    unbound = NS(final_publisher_instance_id=55, final_publish_sequence=13,
+        source_sequence=7, publish_stamp_ns=300_000_000)
+    assert value.native_safe_stop_gate_acceptance_for_receipt(unbound) is None
+
+
+def test_w1_pause_dispatch_uses_accepted_receipt_and_preserves_100ms_budget(native_reader):
+    value, path, _record = native_reader
+    from mecanum_nav_rl_interfaces.msg import SafetyLifecycleState
+    from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+
+    receipt = NS(final_publisher_instance_id=55, final_publish_sequence=12,
+        source_sequence=7, publish_stamp_ns=300_000_000)
+    ingress = dict(kind='B23_SAFE_STOP_RECEIPT_INGRESS', run_id='B23_TEST',
+        fields=dict(publisher='55', key='12', source_sequence='7',
+            stamp_ns='300000000', receive_ns='400000000'),
+        server_leader_pid=777, invocation_id='inv-1')
+    accepted = dict(kind='B23_RECEIPT_GATE_RESULT', run_id='B23_TEST',
+        fields=dict(disposition='3', key='12', reason='accepted_once',
+            sim_ns='1190000000', source='4', source_sequence='7', steady_ns='999000000'),
+        server_leader_pid=777, invocation_id='inv-1')
+    path.write_text(json.dumps(ingress) + '\n' + json.dumps(accepted) + '\n')
+    calls, transitions, confirmations = [], [], []
+    life = SafetyLifecycleState()
+    life.episode_generation, life.reset_epoch, life.runtime_generation = 3, 2, 4
+    life.sequence = 8
+    life.primary_state = life.PRIMARY_ACTIVE
+    life.barrier_state = life.BARRIER_NON_READY
+    life.header.frame_id = 'b2_training_arena'
+    life.header.stamp.sec, life.header.stamp.nanosec = 1, 0
+    life.barrier_stamp.sec, life.barrier_stamp.nanosec = 1, 0
+    life.motion_permitted = False
+    ack = NS(request_bytes=b'pause-request', response_bytes=b'pause-response')
+
+    async def transact(operation, **kwargs):
+        calls.append((operation, kwargs))
+        return ack
+
+    value.control = NS(transact=transact)
+    value.check = lambda **_kwargs: None
+    value.deadline_ns = 2_000_000_000
+    value.ingress = NS(lifecycle=life,
+        begin_pause_transition=lambda **kwargs: transitions.append(kwargs),
+        confirm_pause_transition=lambda result: confirmations.append(result))
+    value.final = NS(publisher_instance_id=55)
+    value.fault_hooks = set()
+    value.pause_ack = None
+    value.expected_paused = False
+    result = asyncio.run(value.dispatch_w1_pause_after_native_acceptance(
+        receipt, deadline_ns=1_500_000_000, published_ns=900_000_000))
+
+    assert result is ack and value.pause_ack is ack and value.expected_paused
+    assert len(calls) == len(transitions) == len(confirmations) == 1
+    assert calls[0][0] == Control.Request.OP_PREPARE_RESET_PAUSE
+    assert calls[0][1]['pause_fence_final_publish_sequence'] == 12
+    assert calls[0][1]['pause_enter_budget_ms'] == 100
+    assert 0 < calls[0][1]['deadline_ns'] <= 1_900_000_000
+    assert transitions[0]['final_sequence'] == 12
+    assert confirmations == [ack]
+
+
+def test_w1_pause_dispatch_refuses_native_receipt_past_watchdog(native_reader):
+    value, path, _record = native_reader
+    receipt = NS(final_publisher_instance_id=55, final_publish_sequence=12,
+        source_sequence=7, publish_stamp_ns=300_000_000)
+    ingress = dict(kind='B23_SAFE_STOP_RECEIPT_INGRESS', run_id='B23_TEST',
+        fields=dict(publisher='55', key='12', source_sequence='7',
+            stamp_ns='300000000', receive_ns='400000000'),
+        server_leader_pid=777, invocation_id='inv-1')
+    accepted = dict(kind='B23_RECEIPT_GATE_RESULT', run_id='B23_TEST',
+        fields=dict(disposition='3', key='12', reason='accepted_once',
+            sim_ns='1190000000', source='4', source_sequence='7', steady_ns='899000000'),
+        server_leader_pid=777, invocation_id='inv-1')
+    path.write_text(json.dumps(ingress) + '\n' + json.dumps(accepted) + '\n')
+    value.ingress = NS(begin_pause_transition=lambda **_kwargs: pytest.fail(
+        'stale W1 receipt must not dispatch pause'))
+    value.control = NS(transact=lambda *_args, **_kwargs: pytest.fail(
+        'stale W1 receipt must not send native control'))
+    value.final = NS(publisher_instance_id=55)
+    value.fault_hooks = set()
+    value.check = lambda **_kwargs: None
+    value.deadline_ns = 2_000_000_000
+    with pytest.raises(TimeoutError, match='zero watchdog freshness'):
+        asyncio.run(value.dispatch_w1_pause_after_native_acceptance(
+            receipt, deadline_ns=1_500_000_000, published_ns=800_000_000))
+
+
 @pytest.mark.parametrize('key,bad', [('invocation_id', 'inv-2'), ('server_leader_pid', 888)])
 def test_native_ack_other_invocation_cannot_supply_drain_proof(native_reader, key, bad):
     value, path, record = native_reader

@@ -3969,6 +3969,7 @@ class TrainingWorkerIO:
         self._native_offset, self._native_partial = 0, b''
         self._native_input_watermark = 0
         self._native_safe_stop_ingress = {}
+        self._native_receipt_gate_acceptance = {}
         self.contact_ack = None
         self.contact_start_request_sequence = None
         self._r07b_rollback_pending_before_ns = None
@@ -5716,6 +5717,33 @@ class TrainingWorkerIO:
                     raise RuntimeError('native SAFE_STOP receipt evidence conflicts for exact key')
                 safe_stop_ingress[key] = record
                 continue
+            if kind == 'B23_RECEIPT_GATE_RESULT':
+                fields = record.get('fields')
+                names = ('disposition', 'key', 'reason', 'sim_ns', 'source',
+                         'source_sequence', 'steady_ns')
+                valid_owner = (isinstance(fields, dict)
+                    and record.get('run_id') == self.descriptor['run_id']
+                    and record.get('server_leader_pid') == self.descriptor['server_leader_pid']
+                    and record.get('invocation_id') == self.descriptor['invocation_id'])
+                valid_fields = (valid_owner and all(
+                    isinstance(fields.get(name), str) for name in names)
+                    and all(fields[name].isdigit() for name in names
+                            if name != 'reason'))
+                if not valid_fields:
+                    self.emit('NATIVE_RECEIPT_GATE_RECORD_REJECTED', {
+                        'reason':('ownership_mismatch' if not valid_owner else 'incomplete_or_invalid_fields'),
+                        'record_sha256':hashlib.sha256(line).hexdigest()})
+                    continue
+                key = (fields['key'], fields['source'], fields['source_sequence'])
+                if fields['disposition'] == '3' and fields['reason'] == 'accepted_once':
+                    acceptances = getattr(self, '_native_receipt_gate_acceptance', None)
+                    if acceptances is None:
+                        acceptances = self._native_receipt_gate_acceptance = {}
+                    prior = acceptances.get(key)
+                    if prior is not None and prior != record:
+                        raise RuntimeError('native receipt gate acceptance conflicts for exact key')
+                    acceptances[key] = record
+                continue
             if kind not in ('B23_SAFETY_INPUT_OBSERVED', 'B23_ADMISSION_ACCEPTED'):
                 continue
             fields = record['fields']
@@ -5738,6 +5766,86 @@ class TrainingWorkerIO:
                 raise RuntimeError('native input evidence ownership mismatch')
             self._native_input_watermark = max(self._native_input_watermark, sample)
         return self._native_input_watermark
+
+    def native_safe_stop_gate_acceptance_for_receipt(self, receipt):
+        """Return the invocation-bound native gate acceptance for one exact SAFE_STOP."""
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+
+        self.read_native_input_watermark()
+        publisher = getattr(receipt, 'final_publisher_instance_id', None)
+        publish_sequence = getattr(receipt, 'final_publish_sequence', None)
+        source_sequence = getattr(receipt, 'source_sequence', getattr(receipt, 'sequence', None))
+        publish_stamp_ns = getattr(receipt, 'publish_stamp_ns', None)
+        if publish_stamp_ns is None:
+            header = getattr(receipt, 'header', None)
+            stamp = getattr(header, 'stamp', None)
+            if stamp is None:
+                return None
+            publish_stamp_ns = stamp_ns(stamp)
+        if any(type(value) is not int or value <= 0 for value in
+                (publisher, publish_sequence, source_sequence, publish_stamp_ns)):
+            return None
+        ingress_key = tuple(str(value) for value in
+            (publisher, publish_sequence, source_sequence, publish_stamp_ns))
+        ingress = self._native_safe_stop_ingress.get(ingress_key)
+        if ingress is None:
+            return None
+        acceptances = getattr(self, '_native_receipt_gate_acceptance', {})
+        record = acceptances.get(
+            (str(publish_sequence), '4', str(source_sequence)))
+        if record is None:
+            return None
+        fields = record['fields']
+        if (fields['key'] != str(publish_sequence)
+                or fields['source'] != '4'
+                or fields['source_sequence'] != str(source_sequence)
+                or fields['reason'] != 'accepted_once'):
+            return None
+        return record
+
+    async def dispatch_w1_pause_after_native_acceptance(
+            self, receipt, *, deadline_ns, published_ns):
+        """Dispatch the one reset pause as soon as native accepts the exact W1 zero."""
+        from mecanum_nav_rl_interfaces.srv import LocalTrainingBackendControl as Control
+        from mecanum_nav_rl.runtime_simulation.local_training_coordinator import lifecycle_request_fields
+
+        acceptance = await self.until(
+            lambda: self.native_safe_stop_gate_acceptance_for_receipt(receipt),
+            deadline_ns=min(deadline_ns, published_ns + 1_000_000_000),
+            phase='native W1 SAFE_STOP receipt acceptance')
+        gate_steady_ns = int(acceptance['fields']['steady_ns'])
+        now_ns = self.now()
+        if gate_steady_ns > now_ns or now_ns - gate_steady_ns > 100_000_000:
+            raise TimeoutError('native W1 receipt acceptance exceeded zero watchdog freshness')
+        budget_ms = min(100, max(0, (deadline_ns - now_ns) // 1_000_000))
+        if budget_ms == 0:
+            raise TimeoutError('native pause enter has no remaining budget')
+        # Keep the established service-response allowance separate from the
+        # stricter native pause-entry budget carried in the request.
+        pause_deadline = min(deadline_ns, now_ns + 1_000_000_000)
+        self.ingress.begin_pause_transition(
+            final_sequence=receipt.final_publish_sequence, deadline_ns=pause_deadline)
+        if 'external_pause_after_w1_before_native_dispatch' in self.fault_hooks:
+            await self.control_world(world_name='b2_training_arena', pause=True,
+                timeout_s=min(1., max(0., (pause_deadline-self.now())/1e9)))
+            self.emit('FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1', {
+                'w1_final_publish_sequence': receipt.final_publish_sequence,
+                'steady_ns': self.now(), 'native_intent_dispatched': False})
+        self.expected_paused = True  # Chỉ sau khi bắt đầu giao dịch pause native.
+        ack = await self.control.transact(Control.Request.OP_PREPARE_RESET_PAUSE,
+            deadline_ns=pause_deadline,
+            **lifecycle_request_fields(self.ingress.lifecycle),
+            final_publisher_instance_id=self.final.publisher_instance_id,
+            pause_fence_final_publish_sequence=receipt.final_publish_sequence,
+            pause_enter_budget_ms=int(budget_ms))
+        self.ingress.confirm_pause_transition(ack)
+        self.pause_ack = ack
+        self.emit('NATIVE_PAUSE_CONFIRMED', {'request_cdr_hex': ack.request_bytes.hex(),
+            'response_cdr_hex': ack.response_bytes.hex(), 'steady_ns': self.now(),
+            'w1_receipt_gate_steady_ns': gate_steady_ns,
+            'w1_receipt_final_publish_sequence': receipt.final_publish_sequence,
+            'w1_receipt_dispatch_delay_ns': self.now() - gate_steady_ns})
+        return ack
 
     def native_safe_stop_ingress_for_receipt(self, receipt):
         """Return the exact, invocation-bound native ingress record for a receipt."""
@@ -5792,7 +5900,7 @@ class TrainingWorkerIO:
             'steady_ns': self.now()})
         return target
 
-    async def freeze_zero(self, *, deadline_ns):
+    async def freeze_zero(self, *, deadline_ns, on_receipt_published=None):
         from mecanum_nav_rl.simulation.local_training_reset import AppliedZeroReceiptFact
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
         adapter = self.safety.local_training
@@ -5820,6 +5928,8 @@ class TrainingWorkerIO:
         receipt = await self.until(lambda: self.final.publication_for_source_sequence(
             source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=target),
             deadline_ns=deadline_ns, phase='final SAFE_STOP drain')
+        if on_receipt_published is not None:
+            on_receipt_published(receipt)
         def applied():
             for pair in reversed(ingress_physics_pair_snapshot(self.ingress)):
                 from rclpy.serialization import deserialize_message
@@ -6193,32 +6303,35 @@ class TrainingWorkerIO:
         await self.until(lambda: ingress_physics_pair_snapshot(self.ingress),
                          deadline_ns=deadline, phase='L1 actual physics context')
         before = ingress_physics_pair_snapshot(self.ingress)[-1].iteration
+        import asyncio
+        w1_receipt_published = asyncio.get_running_loop().create_future()
+        def publish_w1_receipt(receipt):
+            if w1_receipt_published.done():
+                raise RuntimeError('W1 SAFE_STOP receipt was published more than once')
+            w1_receipt_published.set_result((receipt, self.now()))
+
+        async def dispatch_native_pause_after_w1_receipt():
+            receipt, published_ns = await w1_receipt_published
+            return await self.dispatch_w1_pause_after_native_acceptance(
+                receipt, deadline_ns=deadline, published_ns=published_ns)
+
+        early_pause_task = asyncio.create_task(
+            dispatch_native_pause_after_w1_receipt(), name='b23-w1-native-pause-dispatch')
+
         async def native_pause(fact, timeout):
-            budget_ms = min(100, max(0, (deadline - self.now()) // 1_000_000))
-            if budget_ms == 0:
-                raise TimeoutError('native pause enter has no remaining budget')
-            pause_deadline = min(deadline, self.now() + int(timeout * 1e9))
-            self.ingress.begin_pause_transition(final_sequence=fact.final_publish_sequence, deadline_ns=pause_deadline)
-            if 'external_pause_after_w1_before_native_dispatch' in self.fault_hooks:
-                await self.control_world(world_name='b2_training_arena', pause=True,
-                    timeout_s=min(1., max(0., (pause_deadline-self.now())/1e9)))
-                self.emit('FAULT_HOOK_EXTERNAL_PAUSE_AFTER_W1', {
-                    'w1_final_publish_sequence': fact.final_publish_sequence,
-                    'steady_ns': self.now(), 'native_intent_dispatched': False})
-            self.expected_paused = True  # Chỉ sau khi bắt đầu giao dịch pause native.
-            ack = await self.control.transact(Control.Request.OP_PREPARE_RESET_PAUSE,
-                deadline_ns=pause_deadline,
-                **lifecycle_request_fields(self.ingress.lifecycle),
-                final_publisher_instance_id=self.final.publisher_instance_id,
-                pause_fence_final_publish_sequence=fact.final_publish_sequence,
-                pause_enter_budget_ms=int(budget_ms))
-            self.ingress.confirm_pause_transition(ack)
-            self.pause_ack = ack
-            self.emit('NATIVE_PAUSE_CONFIRMED', {'request_cdr_hex': ack.request_bytes.hex(),
-                'response_cdr_hex': ack.response_bytes.hex(), 'steady_ns': self.now()})
+            published = w1_receipt_published.result() if w1_receipt_published.done() else None
+            if (published is None
+                    or fact.final_publish_sequence != published[0].final_publish_sequence):
+                raise RuntimeError('native pause fact does not match the published W1 receipt')
+            try:
+                await asyncio.wait_for(asyncio.shield(early_pause_task), timeout=timeout)
+            except asyncio.TimeoutError as error:
+                raise TimeoutError('native pause did not acknowledge within shared 1 s deadline') from error
             return True
         async def w1():
-            result = await self.freeze_zero(deadline_ns=min(deadline, self.now() + 1_000_000_000))
+            result = await self.freeze_zero(
+                deadline_ns=min(deadline, self.now() + 1_000_000_000),
+                on_receipt_published=publish_w1_receipt)
             self.emit('RESET_W1', {'publish_sequence': result.final_publish_sequence,
                 'safe_stop_sequence': result.source_sequence, 'steady_ns': self.now()})
             return result
@@ -6262,6 +6375,9 @@ class TrainingWorkerIO:
             stop_deadline=min(deadline, started+5_000_000_000)/1e9,
             braking_start_stamp_ns=w0.applied_sim_stamp_ns)
         finally:
+            if not early_pause_task.done():
+                early_pause_task.cancel()
+                await asyncio.gather(early_pause_task, return_exceptions=True)
             if 'set_pose_ack_with_wrong_target' in getattr(self, 'fault_hooks', ()):
                 self.__dict__.pop('set_entity_pose', None)
         l2 = await self.lifecycle_event(rearm=True, deadline_ns=min(deadline, self.now() + 1_000_000_000))
