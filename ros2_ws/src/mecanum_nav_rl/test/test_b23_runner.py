@@ -16,6 +16,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     verify_r01b_external_pause_rejection, verify_r01_pause_ack_failure,
     verify_r02_policy_order, r02a_native_admission_row,
     verify_r02f_safety_hold, verify_r02_late_receipt_rejected,
+    verify_r02c_safe_stop_close,
     verify_r02e_prebind_admission_rejected, verify_r02e_safety_input_enqueued,
     verify_r02g_close, r02g_inhibit_operation,
     await_r02g_exact_safe_stop_application,
@@ -998,10 +999,9 @@ def test_worker_check_accepts_only_packet_pinned_fault_transition_set():
         worker.check(expected_native_fault_flags=(1, 7))
 
 
-@pytest.mark.parametrize('case,terminal_extra', [
-    ('R02c', 0), ('R02d', 0), ('R02d', 256)])
+@pytest.mark.parametrize('terminal_extra', [0, 256])
 def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_closed_zero(
-        case, terminal_extra):
+        terminal_extra):
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     from mecanum_nav_rl.runtime_simulation.b23_runner import await_r02_late_receipt_close
 
@@ -1037,11 +1037,10 @@ def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_c
     worker.pause = pause
     terminal_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
         | SimulationContactState.FAULT_COMMAND_STALE)
-    expected_terminal_flags = ((terminal_flags, terminal_flags | SimulationContactState.FAULT_QUEUE)
-        if case == 'R02d' else (terminal_flags,))
     result = asyncio.run(await_r02_late_receipt_close(
         worker, release_predicate=lambda: release['observed'], deadline_ns=900,
-        expected_terminal_fault_flags=expected_terminal_flags))
+        expected_terminal_fault_flags=(terminal_flags,
+            terminal_flags | SimulationContactState.FAULT_QUEUE)))
 
     assert result is state
     assert state.fault_flags == (SimulationContactState.FAULT_COMMAND_SEQUENCE
@@ -9134,7 +9133,6 @@ def test_observation0_reanchor_keeps_real_b1_receipt_selection_within_500ms():
 
 
 @pytest.mark.parametrize('case,reason,mode,fault_flags,queue_diag', [
-    ('R02c','safe_stop','hold_policy_until_safe_stop',6,False),
     ('R02d','admission_inhibited','hold_policy_until_inhibit',6,False),
     ('R02d','admission_inhibited','hold_policy_until_inhibit',262,True)])
 def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
@@ -9177,6 +9175,48 @@ def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
                 if k != 'raw_record'},'raw_record':fields['raw_record']}) for kind,fields in rows)+'\n')
         with pytest.raises(RuntimeError,match='exact native held-receipt queue-fault evidence'):
             verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
+
+
+def test_r02c_safe_stop_close_requires_exact_inhibited_zero_and_canceled_policy(tmp_path):
+    native=tmp_path/'native-events.jsonl'
+    native.write_text('\n'.join(json.dumps(row) for row in (
+        {'kind':'B23_POLICY_RECEIPT_HELD','fields':{
+            'sequence':'52','source_sequence':'1','receive_ns':'100'}},
+        {'kind':'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE','fields':{
+            'sequence':'52','source_sequence':'1','reason':'safe_stop','receive_ns':'200'}}))+'\n')
+    policy_receipt=NS(final_publish_sequence=52)
+    safe_stop_receipt=NS(final_publish_sequence=53,final_publisher_instance_id=81,
+        final_command=NS(linear=NS(x=0.0,y=0.0),angular=NS(z=0.0)))
+    state=NS(applied_receipt_valid=True,applied_final_publisher_instance_id=81,
+        applied_final_publish_sequence=53,fault_flags=0,local_zero_override=False,
+        actuator_inhibited=True)
+    io=NS(descriptor={'native_events_path':str(native)},
+        ingress=NS(policy_application_for_receipt=lambda _receipt: None,
+            application_for_receipt=lambda _receipt: {'state':state,'received_ns':300}),events=[])
+    result=verify_r02c_safe_stop_close(io,step_index=1,policy_receipt=policy_receipt,
+        safe_stop_receipt=safe_stop_receipt)
+    assert result['release_reason'] == 'safe_stop'
+    assert result['safe_stop_final_publish_sequence'] == 53
+    assert result['native_fault_flags'] == 0
+    assert result['actuator_inhibited'] is True
+    assert result['policy_backend_applied'] is False
+    assert result['b1_transition_committed'] is False
+
+    state.actuator_inhibited=False
+    with pytest.raises(RuntimeError,match='inhibited zero'):
+        verify_r02c_safe_stop_close(io,step_index=1,policy_receipt=policy_receipt,
+            safe_stop_receipt=safe_stop_receipt)
+
+    state.actuator_inhibited=True
+    io.ingress.policy_application_for_receipt=lambda _receipt: {'applied':True}
+    with pytest.raises(RuntimeError,match='POLICY receipt was applied'):
+        verify_r02c_safe_stop_close(io,step_index=1,policy_receipt=policy_receipt,
+            safe_stop_receipt=safe_stop_receipt)
+    io.ingress.policy_application_for_receipt=lambda _receipt: None
+    io.events.append(('POLICY_STEP_COMPLETE',{'step_index':1}))
+    with pytest.raises(RuntimeError,match='B1 commit'):
+        verify_r02c_safe_stop_close(io,step_index=1,policy_receipt=policy_receipt,
+            safe_stop_receipt=safe_stop_receipt)
 
 
 def _postmortem_residue_fixture(tmp_path):

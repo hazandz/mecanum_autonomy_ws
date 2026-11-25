@@ -2776,14 +2776,14 @@ async def await_r02g_exact_safe_stop_application(io, *, receipt, deadline_ns, ro
 def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     """Bind a delayed real POLICY receipt to close-before-release and native rejection."""
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
-    if case not in ('R02c', 'R02d'):
-        raise ValueError('unsupported delayed receipt case')
+    if case != 'R02d':
+        raise ValueError('fault-based delayed receipt verification is only valid for R02d')
     rows = [json.loads(line) for line in Path(io.descriptor['native_events_path'])
         .read_text().splitlines() if line.strip()]
     held = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_HELD'
         and row.get('fields', {}).get('sequence') == str(receipt.final_publish_sequence)
         and row.get('fields', {}).get('source_sequence') == str(step_index)]
-    reason = 'safe_stop' if case == 'R02c' else 'admission_inhibited'
+    reason = 'admission_inhibited'
     released = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE'
         and row.get('fields', {}).get('sequence') == str(receipt.final_publish_sequence)
         and row.get('fields', {}).get('reason') == reason]
@@ -2796,7 +2796,7 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     state = io.ingress.backend_state
     expected_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
         | SimulationContactState.FAULT_COMMAND_STALE)
-    if case == 'R02d' and state is not None and state.fault_flags == (
+    if state is not None and state.fault_flags == (
             expected_fault_flags | SimulationContactState.FAULT_QUEUE):
         # This hook deliberately re-enqueues its held receipt after INHIBIT.
         # The backend records that exact rejected release as FAULT_QUEUE in
@@ -2808,8 +2808,7 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
         if len(queue_fault_rows) != 1:
             raise RuntimeError('R02d lacks exact native held-receipt queue-fault evidence')
     valid_fault_flags = {expected_fault_flags}
-    if case == 'R02d':
-        valid_fault_flags.add(expected_fault_flags | SimulationContactState.FAULT_QUEUE)
+    valid_fault_flags.add(expected_fault_flags | SimulationContactState.FAULT_QUEUE)
     if (state is None or state.fault_flags not in valid_fault_flags
             or not state.local_zero_override):
         raise RuntimeError(f'{case} late POLICY receipt did not produce native fault and zero')
@@ -2824,6 +2823,68 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
         'held_receive_ns':held_ns, 'release_receive_ns':release_ns, 'release_reason':reason,
         'native_fault_flags':state.fault_flags, 'local_zero_override':True,
         'policy_backend_applied':False, 'b1_transition_committed':False}
+
+
+def verify_r02c_safe_stop_close(io, *, step_index, policy_receipt,
+        safe_stop_receipt):
+    """Verify R02c through the accepted SAFE_STOP path, not a required fault.
+
+    A SAFE_STOP may advance the publication watermark before the held POLICY
+    receipt is drained. ReceiptGate then rejects that older key as replay/old
+    sequence while preserving the applied inhibited zero. R02c requires that
+    close behavior and no B1 commit; it does not require the backend to fault.
+    """
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    if policy_receipt is None or safe_stop_receipt is None:
+        raise RuntimeError('R02c exact SAFE_STOP application evidence is incomplete')
+    safe_stop_application = io.ingress.application_for_receipt(safe_stop_receipt)
+    if (not isinstance(safe_stop_application, dict)
+            or safe_stop_application.get('state') is None):
+        raise RuntimeError('R02c exact SAFE_STOP application evidence is incomplete')
+    rows = [json.loads(line) for line in Path(io.descriptor['native_events_path'])
+        .read_text().splitlines() if line.strip()]
+    held = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_HELD'
+        and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)
+        and row.get('fields', {}).get('source_sequence') == str(step_index)]
+    released = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE'
+        and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)
+        and row.get('fields', {}).get('reason') == 'safe_stop']
+    if len(held) != 1 or len(released) != 1:
+        raise RuntimeError('R02c lacks exact native SAFE_STOP hold/release evidence')
+    held_ns = int(held[0]['fields']['receive_ns'])
+    release_ns = int(released[0]['fields']['receive_ns'])
+    if release_ns < held_ns:
+        raise RuntimeError('R02c SAFE_STOP release predates native receipt hold')
+    state = safe_stop_application['state']
+    if (safe_stop_receipt.final_publish_sequence <= policy_receipt.final_publish_sequence
+            or not safe_stop_receipt.final_publish_sequence
+            or not safe_stop_receipt.final_command.linear.x == 0.0
+            or not safe_stop_receipt.final_command.linear.y == 0.0
+            or not safe_stop_receipt.final_command.angular.z == 0.0
+            or not state.applied_receipt_valid
+            or state.applied_final_publisher_instance_id
+                != safe_stop_receipt.final_publisher_instance_id
+            or state.applied_final_publish_sequence != safe_stop_receipt.final_publish_sequence
+            or state.fault_flags != 0 or state.local_zero_override
+            or not state.actuator_inhibited):
+        raise RuntimeError('R02c exact SAFE_STOP was not applied as an inhibited zero')
+    if io.ingress.policy_application_for_receipt(policy_receipt) is not None:
+        raise RuntimeError('R02c held POLICY receipt was applied after SAFE_STOP close')
+    if any(name == 'policy_backend_applied'
+            and facts.get('publish_sequence') == policy_receipt.final_publish_sequence
+            for name, facts in io.events):
+        raise RuntimeError('R02c held POLICY receipt appears in backend application ledger')
+    if any(name == 'POLICY_STEP_COMPLETE' and facts.get('step_index') == step_index
+            for name, facts in io.events):
+        raise RuntimeError('R02c created a B1 commit for the canceled POLICY step')
+    return {'case':'R02c', 'held_final_publish_sequence':policy_receipt.final_publish_sequence,
+        'held_receive_ns':held_ns, 'release_receive_ns':release_ns,
+        'release_reason':'safe_stop', 'safe_stop_final_publish_sequence':
+            safe_stop_receipt.final_publish_sequence,
+        'safe_stop_applied_ns':safe_stop_application.get('received_ns'),
+        'native_fault_flags':state.fault_flags, 'local_zero_override':False,
+        'actuator_inhibited':True, 'policy_backend_applied':False,
+        'b1_transition_committed':False}
 
 
 def r02_held_policy_receipt_from_ledger(io, *, held_row, step_index, transition_id):
@@ -6984,6 +7045,7 @@ class TrainingWorkerIO:
         if close_after_held_receipt is not None:
             if close_after_held_receipt not in ('safe_stop', 'admission_inhibited'):
                 raise ValueError('unsupported R02 close trigger')
+            safe_stop_sequence_before_close = self.safety.local_training.safe_stop_sequence
             # The pending slot is admitted, but Safety's timer was held off
             # during bind/sample delivery so no SAFE_STOP can revoke it. Now
             # allow the real timer to publish POLICY; native captures that
@@ -7028,6 +7090,31 @@ class TrainingWorkerIO:
                     if row.get('kind') == 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE'
                     and row.get('fields', {}).get('reason') == expected_reason
                     and row.get('fields', {}).get('sequence') == str(policy_receipt.final_publish_sequence)), None)
+            if close_after_held_receipt == 'safe_stop':
+                await self.until(released_row, deadline_ns=deadline,
+                    phase='R02c held POLICY receipt released by SAFE_STOP')
+                from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+                stop = await self.until(lambda: self.safety.local_training.last_output
+                    if self.safety.local_training.last_output is not None
+                    and self.safety.local_training.last_output.source
+                        == CommandEnvelope.SOURCE_SAFE_STOP
+                    and self.safety.local_training.last_output.sequence
+                        > safe_stop_sequence_before_close else None,
+                    deadline_ns=deadline, phase='R02c SAFE_STOP output after POLICY close')
+                safe_stop_receipt = await self.until(lambda:
+                    self.final.publication_for_source_sequence(
+                        source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=stop.sequence),
+                    deadline_ns=deadline, phase='R02c exact SAFE_STOP receipt')
+                safe_stop_application = await self.until(lambda:
+                    self.ingress.application_for_receipt(safe_stop_receipt),
+                    deadline_ns=deadline, phase='R02c exact inhibited SAFE_STOP application')
+                checked = verify_r02c_safe_stop_close(self, step_index=token.step_index,
+                    policy_receipt=policy_receipt, safe_stop_receipt=safe_stop_receipt)
+                aborted = b1.lifecycle.abort_step('R02_late_policy_receipt_after_safe_stop')
+                self.emit('R02_LATE_POLICY_RECEIPT_REJECTED', {
+                    **checked, 'b1_abort_status':str(aborted.status), 'steady_ns':self.now()})
+                return {'expected_rejection':True, 'policy_issued':True, **checked,
+                    'b1_step_aborted':True, 'transition_id':token.transition_id}
             native_fault = await await_r02_late_receipt_close(
                 self, release_predicate=released_row, deadline_ns=deadline,
                 expected_terminal_fault_flags=(
