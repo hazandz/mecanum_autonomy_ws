@@ -1648,16 +1648,52 @@ def test_prebind_zero_refresh_requires_new_identity_bound_native_application():
     assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
     assert events[-1][1]['source_sequence']==12
     assert events[-1][1]['final_publish_sequence']==101
+    # Once Safety has reached the old witness sequence, that already applied
+    # receipt must not be reclassified as a watchdog refresh. A later exact
+    # zero publication/application is required before the pending POLICY bind.
+    # The local adapter snapshot can trail an already observed witness by one.
+    value.safety.local_training.safe_stop_sequence=11
+    fresh=IssuedCommandReceiptView(publish_stamp_ns=901,
+        final_publisher_instance_id=77, final_publish_sequence=102,
+        source=ReceiptSource.SAFE_STOP, source_instance_id=88,
+        source_sequence=13, step_index=0, transition_id='', lifecycle=identity,
+        session_id='session-a', ingress_config_hash='a'*64,
+        final_command=(0.0,0.0,0.0), received_steady_ns=998_000_000,
+        frame_id='base_link', admission_valid=True)
+    fresh_state=NS(session_id='session-a', config_hash='a'*64, backend_instance_id=99,
+        episode_generation=2, reset_epoch=3, runtime_generation=4,
+        fault_flags=0, paused=False, local_zero_override=False,
+        applied_receipt_valid=True, applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=102, applied_physics_iteration=13,
+        applied_sim_stamp=NS(sec=0,nanosec=901), physics_iteration=13)
+    fresh_publication=NS(final_publisher_instance_id=77, final_publish_sequence=102,
+        source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=13,
+        final_command=NS(linear=NS(x=0.0,y=0.0,z=0.0),
+            angular=NS(x=0.0,y=0.0,z=0.0)))
+    value.ingress.receipts=[receipt,fresh]
+    value.ingress.backend_state=fresh_state
+    value.ingress.application_for_receipt=lambda item: (
+        {'state':fresh_state,'received_ns':998_000_000}
+        if item is fresh else {'state':state,'received_ns':990_000_000})
+    value.ingress.receipt_for_publication_sequence=lambda seq:{101:receipt,102:fresh}.get(seq)
+    value.final.publication_for_source_sequence=lambda *,source,sequence: (
+        {12:publication,13:fresh_publication}.get(sequence))
+    value.native_safe_stop_ingress_for_receipt=lambda item:{'fields':{'receive_ns':
+        '998000000' if item is fresh else '995000000'}}
     reused=asyncio.run(value.refresh_zero_before_pending_bind(
         deadline_ns=2_000_000_000,zero_witness=result))
-    assert reused['receipt'] is receipt
-    assert reused['age_ns']==10_000_000
-    assert events[-1][1]['reused_exact_scan_window_application'] is True
+    assert reused['receipt'] is fresh
+    assert reused['state'] is fresh_state
+    assert reused['age_ns']==2_000_000
+    assert events[-2][0]=='POLICY_STEP_BIND_ZERO_WITNESS_NOT_REUSED'
+    assert events[-2][1]['reason']=='fresh_native_safe_stop_application_required_before_pending_bind'
+    assert events[-1][1]['baseline_safe_stop_sequence']==12
+    assert 'reused_exact_scan_window_application' not in events[-1][1]
 
 
 def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view():
     from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
-    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
     from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
 
     value=object.__new__(TrainingWorkerIO)
@@ -1665,9 +1701,9 @@ def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view
     life=NS(episode_generation=2, reset_epoch=3, runtime_generation=4)
     identity=lifecycle_identity(life)
     retained=IssuedCommandReceiptView(publish_stamp_ns=900,
-        final_publisher_instance_id=77, final_publish_sequence=101,
+        final_publisher_instance_id=77, final_publish_sequence=102,
         source=ReceiptSource.SAFE_STOP, source_instance_id=88,
-        source_sequence=12, step_index=0, transition_id='', lifecycle=identity,
+        source_sequence=13, step_index=0, transition_id='', lifecycle=identity,
         session_id='session-a', ingress_config_hash='a'*64,
         final_command=(0.0,0.0,0.0), received_steady_ns=990_000_000,
         frame_id='base_link', admission_valid=True)
@@ -1689,19 +1725,25 @@ def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view
         episode_generation=2, reset_epoch=3, runtime_generation=4,
         fault_flags=0, paused=False, local_zero_override=False,
         applied_receipt_valid=True, applied_final_publisher_instance_id=77,
-        applied_final_publish_sequence=101, applied_physics_iteration=12,
+        applied_final_publish_sequence=102, applied_physics_iteration=12,
         applied_sim_stamp=NS(sec=0,nanosec=900))
     latest=NS(session_id='session-a', config_hash='a'*64, backend_instance_id=99,
         episode_generation=2, reset_epoch=3, runtime_generation=4,
         fault_flags=0, paused=False, local_zero_override=False,
-        applied_receipt_valid=False, applied_final_publisher_instance_id=0,
-        applied_final_publish_sequence=0, applied_physics_iteration=0,
-        applied_sim_stamp=NS(sec=0,nanosec=0), physics_iteration=13)
+        applied_receipt_valid=True, applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=102, applied_physics_iteration=12,
+        applied_sim_stamp=NS(sec=0,nanosec=900), physics_iteration=13)
     value.safety=NS(local_training=NS(safe_stop_sequence=11))
-    value.ingress=NS(lifecycle=life, safe_stop_source_id=88,
+    value.ingress=NS(lifecycle=life, safe_stop_source_id=88, receipts=[retained],
         backend_state=latest,
-        receipt_for_publication_sequence=lambda seq:retained if seq==101 else None)
-    value.final=NS(publisher_instance_id=77)
+        application_for_receipt=lambda _receipt:{'state':state,'received_ns':990_000_000},
+        receipt_for_publication_sequence=lambda seq:retained if seq==102 else None)
+    publication=NS(final_publisher_instance_id=77, final_publish_sequence=102,
+        source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=13,
+        final_command=NS(linear=NS(x=0.0,y=0.0,z=0.0),
+            angular=NS(x=0.0,y=0.0,z=0.0)))
+    value.final=NS(publisher_instance_id=77,
+        publication_for_source_sequence=lambda *,source,sequence:publication if sequence==13 else None)
     value.descriptor={'session_id':'session-a','config_hash':'a'*64,
         'backend_instance_id':99}
     value.native_safe_stop_ingress_for_receipt=lambda _receipt:{'fields':{'receive_ns':'1000000000'}}
@@ -1721,12 +1763,14 @@ def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view
     assert result['application']['state'] is state
     assert result['age_ns']==10_000_000
     assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
-    assert events[-1][1]['source_sequence']==12
-    assert events[-1][1]['final_publish_sequence']==101
-    assert events[-1][1]['reused_exact_scan_window_application'] is True
+    assert events[-1][1]['source_sequence']==13
+    assert events[-1][1]['final_publish_sequence']==102
+    assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
+    assert events[0][0]=='POLICY_STEP_BIND_ZERO_WITNESS_NOT_REUSED'
+    assert 'reused_exact_scan_window_application' not in events[-1][1]
 
     newer_policy=IssuedCommandReceiptView(publish_stamp_ns=1_000,
-        final_publisher_instance_id=77, final_publish_sequence=102,
+        final_publisher_instance_id=77, final_publish_sequence=103,
         source=ReceiptSource.POLICY, source_instance_id=90,
         source_sequence=1, step_index=1, transition_id='step-1', lifecycle=identity,
         session_id='session-a', ingress_config_hash='a'*64,
@@ -1734,11 +1778,11 @@ def test_prebind_zero_refresh_normalizes_exact_generated_receipt_to_ingress_view
         frame_id='base_link', admission_valid=True)
     latest.applied_receipt_valid=True
     latest.applied_final_publisher_instance_id=77
-    latest.applied_final_publish_sequence=102
+    latest.applied_final_publish_sequence=103
     latest.applied_physics_iteration=14
     latest.applied_sim_stamp=NS(sec=0,nanosec=1_000)
     value.ingress.receipt_for_publication_sequence=lambda seq: {
-        101:retained,102:newer_policy}.get(seq)
+        102:retained,103:newer_policy}.get(seq)
     with pytest.raises(RuntimeError,match='not a SAFE_STOP zero'):
         asyncio.run(value.refresh_zero_before_pending_bind(deadline_ns=2_000_000_000,
             zero_witness={'receipt':generated,'state':state,'received_ns':990_000_000,
@@ -1821,10 +1865,9 @@ def test_prebind_zero_refresh_waits_when_safety_has_published_a_newer_zero():
     assert len(waits)==1
     assert result['receipt'] is fresh
     assert result['state'] is fresh_state
-    assert events[0][0]=='POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED'
-    assert events[0][1]['reason']=='native_safe_stop_ingress_stale_or_missing'
-    assert events[0][1]['native_receive_ns']==880_000_000
-    assert events[0][1]['native_age_ns']==120_000_000
+    assert events[0][0]=='POLICY_STEP_BIND_ZERO_WITNESS_NOT_REUSED'
+    assert events[0][1]['reason']=='fresh_native_safe_stop_application_required_before_pending_bind'
+    assert events[0][1]['witness_source_sequence']==12
     assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
     assert events[-1][1]['baseline_safe_stop_sequence']==13
     assert events[-1][1]['source_sequence']==14
@@ -1906,8 +1949,8 @@ def test_prebind_zero_override_waits_for_new_exact_safe_stop_application():
     assert result['state'] is fresh_state
     assert result['received_ns']==fresh.received_steady_ns
     assert result['age_ns']==value.now()-fresh.received_steady_ns
-    assert events[0][0]=='POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED'
-    assert events[0][1]['reason']=='latest_native_local_zero_override'
+    assert events[0][0]=='POLICY_STEP_BIND_ZERO_WITNESS_NOT_REUSED'
+    assert events[0][1]['reason']=='fresh_native_safe_stop_application_required_before_pending_bind'
     assert events[-1][0]=='POLICY_STEP_BIND_ZERO_REFRESH_APPLIED'
     assert events[-1][1]['source_sequence']==13
     assert events[-1][1]['final_publish_sequence']==102

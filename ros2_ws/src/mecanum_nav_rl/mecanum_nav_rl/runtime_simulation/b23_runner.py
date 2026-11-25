@@ -6305,167 +6305,35 @@ class TrainingWorkerIO:
         publish another zero, and bind only after that exact receipt has an
         exact native application in the same session/lifecycle.
         """
-        from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
-        from mecanum_nav_rl.core.issued_command_cutoff import IssuedCommandReceiptView, ReceiptSource
-        from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity, stamp_ns
+        from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
 
         adapter = self.safety.local_training
+        witness_sequence = None
         if zero_witness is not None:
             candidate_receipt = (zero_witness.get('receipt')
                 if isinstance(zero_witness, dict) else None)
-            native_ingress = (self.native_safe_stop_ingress_for_receipt(candidate_receipt)
-                if candidate_receipt is not None else None)
-            try:
-                native_receive_ns = int(native_ingress['fields']['receive_ns'])
-                native_age_ns = self.now() - native_receive_ns
-            except (TypeError, KeyError, ValueError):
-                native_receive_ns = None
-                native_age_ns = None
-            if (native_age_ns is None or native_age_ns < 0 or native_age_ns > 100_000_000):
-                self.emit('POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED', {
-                    'reason':'native_safe_stop_ingress_stale_or_missing',
-                    'native_receive_ns':native_receive_ns,
-                    'native_age_ns':native_age_ns,
-                    'steady_ns':self.now(),
-                })
-                zero_witness = None
-        if zero_witness is not None:
-            candidate_receipt = (zero_witness.get('receipt')
-                if isinstance(zero_witness, dict) else None)
-            candidate_sequence = getattr(candidate_receipt, 'source_sequence', None)
-            # A SAFE_STOP can be published and accepted by native while the
-            # worker still holds an older backend-state snapshot. Reusing that
-            # older application's steady timestamp would let us freeze the
-            # stream before the latest zero has actually advanced through the
-            # native gate. Require the witness to cover the current Safety
-            # sequence; otherwise keep the stream live and join a newer exact
-            # zero application below.
-            if (type(candidate_sequence) is int
-                    and candidate_sequence < adapter.safe_stop_sequence):
-                self.emit('POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED', {
-                    'reason':'safety_safe_stop_sequence_advanced',
-                    'witness_source_sequence':candidate_sequence,
-                    'latest_safe_stop_sequence':adapter.safe_stop_sequence,
-                    'steady_ns':self.now(),
-                })
-                zero_witness = None
-        if zero_witness is not None:
-            receipt = zero_witness.get('receipt') if isinstance(zero_witness, dict) else None
-            state = zero_witness.get('state') if isinstance(zero_witness, dict) else None
-            received_ns = zero_witness.get('received_ns') if isinstance(zero_witness, dict) else None
-            if isinstance(receipt, FinalIssuedCommandReceipt):
-                # freeze_step_streams retains the exact generated ROS receipt,
-                # while scan-window alignment returns the immutable view made
-                # from those same ingress bytes. Normalize the former only by
-                # joining its complete identity back to that retained view.
-                retained = self.ingress.receipt_for_publication_sequence(
-                    receipt.final_publish_sequence)
-                receipt_source = {
-                    FinalIssuedCommandReceipt.SOURCE_POLICY: ReceiptSource.POLICY,
-                    FinalIssuedCommandReceipt.SOURCE_SAFE_STOP: ReceiptSource.SAFE_STOP,
-                }.get(receipt.source)
-                command = (receipt.final_command.linear.x, receipt.final_command.linear.y,
-                    receipt.final_command.angular.z)
-                if (retained is None or receipt_source is not retained.source
-                        or receipt.final_publisher_instance_id != retained.final_publisher_instance_id
-                        or receipt.final_publish_sequence != retained.final_publish_sequence
-                        or receipt.source_instance_id != retained.source_instance_id
-                        or receipt.sequence != retained.source_sequence
-                        or receipt.step_index != retained.step_index
-                        or receipt.transition_id != retained.transition_id
-                        or lifecycle_identity(receipt) != retained.lifecycle
-                        or stamp_ns(receipt.header.stamp) != retained.publish_stamp_ns
-                        or receipt.header.frame_id != retained.frame_id
-                        or command != retained.final_command
-                        or any((receipt.final_command.linear.z, receipt.final_command.angular.x,
-                            receipt.final_command.angular.y))):
-                    raise RuntimeError('pre-bind generated receipt does not match retained ingress identity')
-                receipt = retained
-            elif receipt is not None and not isinstance(receipt, IssuedCommandReceiptView):
-                raise RuntimeError('pre-bind receipt has an unsupported representation')
-            latest = self.ingress.backend_state
-            life = self.ingress.lifecycle
-            if (receipt is None or state is None or type(received_ns) is not int or latest is None
-                    or life is None or self.now() < received_ns
-                    or self.now() - received_ns > 100_000_000
-                    or receipt.source is not ReceiptSource.SAFE_STOP
-                    or receipt.final_publisher_instance_id != self.final.publisher_instance_id
-                    or receipt.source_instance_id != self.ingress.safe_stop_source_id
-                    or receipt.lifecycle != lifecycle_identity(life)
-                    or receipt.session_id != self.descriptor['session_id']
-                    or receipt.ingress_config_hash != self.descriptor['config_hash']
-                    or receipt.frame_id != 'base_link' or not receipt.admission_valid
-                    or any(receipt.final_command)
-                    or state.fault_flags != 0 or state.paused or state.local_zero_override
-                    or state.applied_final_publisher_instance_id != self.final.publisher_instance_id
-                    or state.applied_final_publish_sequence != receipt.final_publish_sequence
-                    or state.backend_instance_id != self.descriptor['backend_instance_id']
-                    or state.session_id != self.descriptor['session_id']
-                    or state.config_hash != self.descriptor['config_hash']
-                    or lifecycle_identity(state) != lifecycle_identity(life)
-                    or latest.fault_flags != 0 or latest.paused
-                    or latest.backend_instance_id != self.descriptor['backend_instance_id']
-                    or latest.session_id != self.descriptor['session_id']
-                    or latest.config_hash != self.descriptor['config_hash']
-                    or lifecycle_identity(latest) != lifecycle_identity(life)
-                    or latest.physics_iteration < state.applied_physics_iteration):
-                raise RuntimeError('pre-bind zero witness expired or mismatched after scan-window alignment')
-            if latest.local_zero_override:
-                # The exact previous application is no longer current when
-                # native has entered its local-zero override. Keep POLICY
-                # closed and wait below for a newer, exact SAFE_STOP
-                # application under this same identity and deadline.
-                self.emit('POLICY_STEP_BIND_ZERO_WITNESS_INVALIDATED', {
-                    'reason':'latest_native_local_zero_override',
-                    'prior_source_sequence':receipt.source_sequence,
-                    'prior_publish_sequence':receipt.final_publish_sequence,
-                    'latest_physics_iteration':latest.physics_iteration,
-                    'lifecycle':{'episode_generation':lifecycle_identity(life).episode_generation,
-                        'reset_epoch':lifecycle_identity(life).reset_epoch,
-                        'runtime_generation':lifecycle_identity(life).runtime_generation},
-                    'deadline_ns':deadline_ns,'steady_ns':self.now(),
-                })
-                zero_witness = None
-            else:
-                if latest.applied_receipt_valid:
-                    if (latest.applied_final_publisher_instance_id != self.final.publisher_instance_id
-                            or latest.applied_final_publish_sequence < receipt.final_publish_sequence):
-                        raise RuntimeError('pre-bind latest native application conflicts with zero witness')
-                    current_receipt = self.ingress.receipt_for_publication_sequence(
-                        latest.applied_final_publish_sequence)
-                else:
-                    if any((latest.applied_final_publisher_instance_id,
-                            latest.applied_final_publish_sequence,
-                            latest.applied_physics_iteration, stamp_ns(latest.applied_sim_stamp))):
-                        raise RuntimeError('pre-bind latest status omits application validity but carries proof fields')
-                    # Backend application is reported for its physics iteration
-                    # only. A later healthy status can omit that one-iteration
-                    # fact while the exact, fresh SAFE_STOP application remains
-                    # the current retained witness.
-                    current_receipt = self.ingress.receipt_for_publication_sequence(
-                        receipt.final_publish_sequence)
-                if (current_receipt is None or current_receipt.source is not ReceiptSource.SAFE_STOP
-                        or current_receipt.final_publisher_instance_id != self.final.publisher_instance_id
-                        or any(current_receipt.final_command)):
-                    raise RuntimeError('pre-bind latest native application is not a SAFE_STOP zero')
-                age_ns = self.now() - received_ns
-                refreshed = {'receipt':receipt,
-                    'application':zero_witness.get('application', {'state':state,'received_ns':received_ns}),
-                    'age_ns':age_ns, 'state':state, 'received_ns':received_ns,
-                    'native_receive_ns':native_receive_ns,'native_age_ns':native_age_ns}
-                self.emit('POLICY_STEP_BIND_ZERO_REFRESH_APPLIED', {
-                    'baseline_safe_stop_sequence':adapter.safe_stop_sequence,
-                    'source_sequence':receipt.source_sequence,
-                    'final_publish_sequence':receipt.final_publish_sequence,
-                    'native_iteration':state.applied_physics_iteration,
-                    'native_stamp_ns':(state.applied_sim_stamp.sec * 1_000_000_000
-                        + state.applied_sim_stamp.nanosec),
-                    'receipt_received_steady_ns':received_ns,'receipt_age_ns':age_ns,
-                    'native_receive_ns':native_receive_ns,'native_receipt_age_ns':native_age_ns,
-                    'deadline_ns':deadline_ns,'steady_ns':self.now(),
-                    'reused_exact_scan_window_application':True})
-                return refreshed
-        baseline_sequence = adapter.safe_stop_sequence
+            witness_sequence = getattr(candidate_receipt, 'source_sequence', None)
+            if type(witness_sequence) is not int:
+                witness_sequence = getattr(candidate_receipt, 'sequence', None)
+            self.emit('POLICY_STEP_BIND_ZERO_WITNESS_NOT_REUSED', {
+                'reason':'fresh_native_safe_stop_application_required_before_pending_bind',
+                'witness_source_sequence':witness_sequence,
+                'latest_safe_stop_sequence':adapter.safe_stop_sequence,
+                'steady_ns':self.now(),
+            })
+        # A witness collected during scan alignment proves zero at that earlier
+        # cutoff only. It must not be treated as a watchdog refresh: the native
+        # gate measures receipt receive-time, so wait for a later SAFE_STOP
+        # publication and exact application before closing the stream/binding
+        # the pending POLICY slot.
+        # The aligned witness can already be present in ingress while the
+        # Safety adapter's sequence snapshot still trails that callback. Use
+        # its sequence only as an exclusion watermark, never as proof, so the
+        # wait cannot immediately select and reuse the same old receipt.
+        baseline_sequence = max(adapter.safe_stop_sequence,
+            witness_sequence if type(witness_sequence) is int else adapter.safe_stop_sequence)
         life = self.ingress.lifecycle
         if life is None:
             raise RuntimeError('cannot refresh pre-bind zero without lifecycle identity')
@@ -6480,6 +6348,14 @@ class TrainingWorkerIO:
                     or state.backend_instance_id != self.descriptor['backend_instance_id']
                     or lifecycle_identity(state) != expected_lifecycle):
                 return None
+            if state.applied_receipt_valid:
+                latest_application = self.ingress.receipt_for_publication_sequence(
+                    state.applied_final_publish_sequence)
+                if (latest_application is not None
+                        and (latest_application.source is not ReceiptSource.SAFE_STOP
+                            or latest_application.final_publisher_instance_id != self.final.publisher_instance_id
+                            or any(latest_application.final_command))):
+                    raise RuntimeError('pre-bind latest native application is not a SAFE_STOP zero')
             for receipt in reversed(tuple(self.ingress.receipts)):
                 if (receipt.source is not ReceiptSource.SAFE_STOP
                         or receipt.source_instance_id != self.ingress.safe_stop_source_id
