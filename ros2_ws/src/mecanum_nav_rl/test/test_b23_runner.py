@@ -122,6 +122,19 @@ def test_policy_cutoff_attempt_batch_bounds_history_work_and_rotates_fallback():
     assert third == (40, 10)
     assert policy_cutoff_attempt_batch([50], cursor) == ((50,), 0)
     assert policy_cutoff_attempt_batch([], cursor) == ((), 0)
+
+
+def test_policy_cutoff_batch_retries_recent_pending_before_rotating_history():
+    stamps = [10, 20, 30, 40]
+    batch, cursor = policy_cutoff_attempt_batch(stamps, 0, preferred_cutoff=20)
+    assert batch == (40, 20)
+    assert cursor == 1
+    # A pending cutoff that has fallen out of the retained source window is
+    # ignored; the bounded historical fallback still advances.
+    batch, cursor = policy_cutoff_attempt_batch(
+        stamps, cursor, preferred_cutoff=5)
+    assert batch == (40, 20)
+    assert cursor == 2
     with pytest.raises(ValueError, match='process CPU timestamps'):
         worker_latency_diagnostic(started_ns=1, completed_ns=30_000_001,
             thread_cpu_started_ns=1, thread_cpu_completed_ns=2,
@@ -7900,8 +7913,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         assert len(emitted) == len(set(emitted)), f'pending cutoff evidence was duplicated: {history!r}'
         ordered_cutoffs = sorted(value.ingress.scans, reverse=True)
         assert commit_calls[:4] == [ordered_cutoffs[0], ordered_cutoffs[1],
-            ordered_cutoffs[0], ordered_cutoffs[2]], (
-            f'policy step must try the freshest cutoff plus one rotating fallback per yield: {commit_calls!r}')
+            ordered_cutoffs[0], ordered_cutoffs[1]], (
+            f'policy step must retry the recent pending cutoff before rotating history: {commit_calls!r}')
         assert ('yield', .002) in history, (
             f'pending B1 cutoff work did not yield to the Safety executor: {history!r}')
         repeated_cutoffs = {cutoff for cutoff in commit_calls

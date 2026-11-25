@@ -169,8 +169,8 @@ def worker_latency_diagnostic(*, started_ns, completed_ns,
     return result
 
 
-def policy_cutoff_attempt_batch(cutoffs, fallback_cursor):
-    """Bound B1 cutoff work per event-loop turn while retaining older fallback."""
+def policy_cutoff_attempt_batch(cutoffs, fallback_cursor, *, preferred_cutoff=None):
+    """Try newest and a recently pending cutoff before rotating older history."""
     if type(fallback_cursor) is not int or fallback_cursor < 0:
         raise ValueError('POLICY cutoff fallback cursor must be a nonnegative integer')
     ordered = sorted(set(cutoffs), reverse=True)
@@ -179,6 +179,10 @@ def policy_cutoff_attempt_batch(cutoffs, fallback_cursor):
     if len(ordered) == 1:
         return (ordered[0],), 0
     fallback_count = len(ordered) - 1
+    if preferred_cutoff in ordered and preferred_cutoff != ordered[0]:
+        fallback_index = ordered.index(preferred_cutoff)
+        next_cursor = (fallback_cursor + 1) % fallback_count
+        return (ordered[0], ordered[fallback_index]), next_cursor
     fallback_index = 1 + (fallback_cursor % fallback_count)
     next_cursor = (fallback_cursor + 1) % fallback_count
     return (ordered[0], ordered[fallback_index]), next_cursor
@@ -7845,6 +7849,7 @@ class TrainingWorkerIO:
                 minimum_cutoff_ns=minimum_cutoff, deadline_ns=deadline)
         last_pending = None
         cutoff_fallback_cursor = 0
+        recent_pending_cutoff = None
         emitted_pending_cutoff_reasons = set()
         while self.now() < deadline:
             self.check()
@@ -7853,14 +7858,19 @@ class TrainingWorkerIO:
             # full sweep while the newest adjacent receipt is pending can hold
             # the Python GIL long enough to starve the independent Safety
             # watchdog timer. Yield below before trying the next fallback.
+            available_cutoffs = tuple(stamp for stamp in self.ingress.scans
+                if stamp >= minimum_cutoff)
+            if recent_pending_cutoff not in available_cutoffs:
+                recent_pending_cutoff = None
             cutoffs, cutoff_fallback_cursor = policy_cutoff_attempt_batch(
-                (stamp for stamp in self.ingress.scans if stamp >= minimum_cutoff),
-                cutoff_fallback_cursor)
+                available_cutoffs, cutoff_fallback_cursor,
+                preferred_cutoff=recent_pending_cutoff)
             for cutoff in cutoffs:
                 try:
                     transition = b1.commit_step(cutoff)
                 except B1SnapshotPending as error:
                     last_pending = str(error)
+                    recent_pending_cutoff = cutoff
                     if should_emit_policy_cutoff_pending(
                             emitted_pending_cutoff_reasons, cutoff, last_pending):
                         pending_facts = {'step_index': token.step_index,
