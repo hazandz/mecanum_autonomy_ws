@@ -4485,9 +4485,14 @@ def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
         applied_final_publish_sequence=82)
     application = {'state':state,'received_ns':123}
     calls = []
-    adapter = NS(last_output=NS(source=CommandEnvelope.SOURCE_POLICY, sequence=3),
+    adapter = NS(last_output=NS(source=CommandEnvelope.SOURCE_POLICY, sequence=3,
+        source_instance_id=44, header=NS(stamp=NS(sec=1,nanosec=0))),
+        node=NS(_accepted_pub=NS(wait_for_all_acked=lambda timeout: (
+            calls.append(('writer_ack', timeout.nanoseconds)) or True))),
         set_stream_enabled=lambda enabled:calls.append(('stream',enabled)))
-    io = NS(final=NS(publication_for_source_sequence=lambda **kw:(
+    io = NS(final=NS(publication_for_output=lambda output:(
+            calls.append(('exact_receipt', output.sequence)),receipt)[1],
+        publication_for_source_sequence=lambda **kw:(
             calls.append(('receipt',kw)),receipt)[1]),
         ingress=NS(policy_application_for_receipt=lambda selected:(
             calls.append(('application',selected)),application)[1]),
@@ -4504,10 +4509,12 @@ def test_r02g_quiesces_and_drains_last_safety_publication_before_close():
 
     assert result is receipt
     assert calls[0] == ('stream',False)
-    assert calls[1] == ('until','last Safety output receipt before close',150)
-    assert calls[2] == ('receipt',{'source':CommandEnvelope.SOURCE_POLICY,'sequence':3})
-    assert calls[3] == ('until','last POLICY application before close',150)
-    assert calls[4] == ('application',receipt)
+    assert calls[1] == ('writer_ack',50)
+    assert calls[2][0] == 'SAFETY_OUTPUT_WRITER_ACKED'
+    assert calls[3] == ('until','exact last Safety output receipt before close',150)
+    assert calls[4] == ('exact_receipt',3)
+    assert calls[5] == ('until','last POLICY application before close',150)
+    assert calls[6] == ('application',receipt)
     assert calls[-1][0] == 'R02G_PRE_CLOSE_OUTPUT_DRAINED'
 
 
@@ -5659,6 +5666,69 @@ def test_final_publication_view_selects_retained_receipt_for_exact_safety_sequen
         source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP, sequence=30) is None
 
 
+def test_final_publication_view_joins_repeated_source_sequence_to_exact_output():
+    from collections import OrderedDict
+    import threading
+    from rclpy.serialization import serialize_message
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, ReceiptSource)
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+    from mecanum_nav_rl.runtime_simulation.b23_runner import FinalPublicationView
+
+    identity = EpisodeLifecycleIdentity(2, 3, 4)
+    output = CommandEnvelope()
+    output.header.frame_id = 'base_link'
+    output.header.stamp.sec, output.header.stamp.nanosec = 11, 20_000_000
+    output.source, output.sequence, output.source_instance_id = (
+        CommandEnvelope.SOURCE_POLICY, 29, 35866929034594931)
+    output.episode_generation, output.reset_epoch, output.runtime_generation = 2, 3, 4
+    output.twist.linear.x, output.twist.linear.y, output.twist.angular.z = 0.1, -0.02, 0.03
+
+    def record(publish_sequence, stamp_ns, source_id=output.source_instance_id):
+        sec, nanosec = divmod(stamp_ns, 1_000_000_000)
+        receipt = FinalIssuedCommandReceipt()
+        receipt.header.frame_id = 'base_link'
+        receipt.header.stamp.sec, receipt.header.stamp.nanosec = sec, nanosec
+        receipt.episode_generation, receipt.reset_epoch, receipt.runtime_generation = 2, 3, 4
+        receipt.source, receipt.sequence = output.source, output.sequence
+        receipt.source_instance_id = source_id
+        receipt.final_publisher_instance_id = 55
+        receipt.final_publish_sequence = publish_sequence
+        receipt.final_command.linear.x = output.twist.linear.x
+        receipt.final_command.linear.y = output.twist.linear.y
+        receipt.final_command.angular.z = output.twist.angular.z
+        view = IssuedCommandReceiptView(
+            publish_stamp_ns=stamp_ns, final_publisher_instance_id=55,
+            final_publish_sequence=publish_sequence, source=ReceiptSource.POLICY,
+            source_instance_id=source_id, source_sequence=29, step_index=29,
+            transition_id='step-29', lifecycle=identity, session_id='session',
+            ingress_config_hash='a'*64, final_command=(0.1, -0.02, 0.03),
+            received_steady_ns=publish_sequence, frame_id='base_link', admission_valid=True)
+        return view, serialize_message(receipt)
+
+    stale, stale_bytes = record(1717, 11_010_000_000)
+    wrong_identity, wrong_identity_bytes = record(1718, 11_020_000_000, source_id=7)
+    exact, exact_bytes = record(1719, 11_020_000_000)
+    view = FinalPublicationView(55)
+    view.ingress = NS(receipts=[stale], lock=threading.RLock(),
+        _receipt_bytes=OrderedDict([(1717, stale_bytes)]))
+
+    # Reproduce the R08 ordering: publication 1718 is the last Safety output,
+    # but only 1717 has reached this worker's receipt view. The old sequence
+    # join returns 1717 even though its timestamp is stale for the output.
+    assert view.publication_for_source_sequence(
+        source=output.source, sequence=output.sequence).final_publish_sequence == 1717
+    assert view.publication_for_output(output) is None
+    view.ingress.receipts.extend((wrong_identity, exact))
+    view.ingress._receipt_bytes.update([(1718, wrong_identity_bytes), (1719, exact_bytes)])
+    selected = view.publication_for_output(output)
+    assert selected is not None
+    assert selected.final_publish_sequence == 1719
+    assert selected.source_instance_id == output.source_instance_id
+    assert (selected.header.stamp.sec, selected.header.stamp.nanosec) == (11, 20_000_000)
+
+
 def test_r02_order_assessment_requires_actual_native_gate_timestamps(tmp_path):
     import json
     path=tmp_path/'native-events.jsonl'
@@ -6723,10 +6793,13 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
         applied_final_publisher_instance_id=55, local_zero_override=False,
         applied_receipt_valid=True, paused=False, applied_physics_iteration=304,
         applied_sim_stamp=NS(sec=3,nanosec=40_000_000))
-    adapter = NS(safe_stop_sequence=7, last_output=NS(source=source, source_instance_id=44, sequence=7),
+    adapter = NS(safe_stop_sequence=7, last_output=NS(source=source, source_instance_id=44, sequence=7,
+        header=NS(stamp=NS(sec=3,nanosec=40_000_000))),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
         set_stream_enabled=lambda enabled: calls.append(('stream', enabled)),
-        tick=lambda: calls.append(('immediate_safety_tick',)))
+        tick=lambda: calls.append(('immediate_safety_tick',)),
+        node=NS(_accepted_pub=NS(wait_for_all_acked=lambda timeout: (
+            calls.append(('writer_ack', timeout.nanoseconds)) or True))))
     value.safety = NS(local_training=adapter)
     value.ingress.last_published_sample_sequence = 9
     value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
@@ -6750,6 +6823,7 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     value.final = NS(publisher_instance_id=55,
         last_publication=NS(source=source, source_instance_id=44,
             sequence=7, final_publish_sequence=20),
+        publication_for_output=lambda output: pre_receipt,
         publication_for_source_sequence=lambda *, source, sequence: (
             pre_receipt if sequence == 7 else closing_receipt
             if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 8 else None))
@@ -6788,10 +6862,11 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert ('stream', True) in calls
     assert ('stream', False) in calls
     assert ('inhibit', False) in calls
-    assert events[0][0] == 'STEP_PRE_CLOSE_OUTPUT_DRAINED'
-    assert events[1][0] == 'INHIBITED_SAFETY_INPUT_DRAINED'
-    assert events[1][1]['sample_sequence'] == 10
-    assert events[1][1]['native_input_watermark'] == 10
+    assert events[0][0] == 'SAFETY_OUTPUT_WRITER_ACKED'
+    assert events[1][0] == 'STEP_PRE_CLOSE_OUTPUT_DRAINED'
+    assert events[2][0] == 'INHIBITED_SAFETY_INPUT_DRAINED'
+    assert events[2][1]['sample_sequence'] == 10
+    assert events[2][1]['native_input_watermark'] == 10
     names = [name for name, _ in events]
     assert names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < names.index('INHIBITED_SAFETY_INPUT_DRAINED')
     assert names.index('INHIBITED_SAFETY_INPUT_DRAINED') < names.index('ADMISSION_STREAM_FROZEN')
@@ -6800,7 +6875,10 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert calls.index(('stream', True)) < calls.index(('immediate_safety_tick',)) < calls.index(('inhibit', False))
     assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
     assert calls.index(('stream', False)) < calls.index(('stream', True))
+    assert calls.index(('writer_ack', 20_000_000)) < calls.index(('inhibit', False))
     event_names = [name for name, _ in events]
+    assert event_names.index('SAFETY_OUTPUT_WRITER_ACKED') < event_names.index(
+        'STEP_PRE_CLOSE_OUTPUT_DRAINED')
     assert event_names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < event_names.index(
         'INHIBITED_SAFETY_INPUT_DRAINED')
     assert adapter.last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
@@ -6838,10 +6916,12 @@ def test_freeze_step_streams_recovers_from_coalesced_exact_safe_stop_receipt():
         header=NS(stamp=NS(sec=3, nanosec=50_000_000)))
     calls, events, watermark = [], [], [9]
     adapter = NS(safe_stop_sequence=7,
-        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7),
+        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7,
+            header=NS(stamp=NS(sec=3,nanosec=40_000_000))),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
         set_stream_enabled=lambda enabled: calls.append(('stream', enabled)),
-        tick=lambda: calls.append(('immediate_safety_tick',)))
+        tick=lambda: calls.append(('immediate_safety_tick',)),
+        node=NS(_accepted_pub=NS(wait_for_all_acked=lambda _timeout: True)))
     value.safety = NS(local_training=adapter)
     value.ingress = NS(fault=None, backend_state=state, lifecycle=life,
         last_published_sample_sequence=9,
@@ -6863,6 +6943,7 @@ def test_freeze_step_streams_recovers_from_coalesced_exact_safe_stop_receipt():
     value.read_native_input_watermark = lambda: watermark[0]
     value._native_input_watermark = 9
     value.final = NS(publisher_instance_id=55, last_publication=None,
+        publication_for_output=lambda output: pre_close_receipt,
         publication_for_source_sequence=lambda *, source, sequence: (
             pre_close_receipt if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 7
             else candidate if source == CommandEnvelope.SOURCE_SAFE_STOP and sequence == 10
@@ -7014,10 +7095,12 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
     value, clock = worker()
     calls, events = [], []
     adapter = NS(safe_stop_sequence=7,
-        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7),
+        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7,
+            header=NS(stamp=NS(sec=3,nanosec=40_000_000))),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
         set_stream_enabled=lambda enabled: calls.append(('stream', enabled)),
-        tick=lambda: calls.append(('immediate_safety_tick',)))
+        tick=lambda: calls.append(('immediate_safety_tick',)),
+        node=NS(_accepted_pub=NS(wait_for_all_acked=lambda _timeout: True)))
     value.safety = NS(local_training=adapter)
     value.ingress.last_published_sample_sequence = 9
     value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
@@ -7059,7 +7142,9 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
     selected = []
     value.final = NS(publisher_instance_id=55, last_publication=NS(
         source=stop.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7,
-        final_publish_sequence=20), publication_for_source_sequence=lambda *, source, sequence: (
+        final_publish_sequence=20),
+        publication_for_output=lambda output: prior_receipt,
+        publication_for_source_sequence=lambda *, source, sequence: (
             selected.append((source, sequence)) or (
                 prior_receipt if (source, sequence) == (stop.SOURCE_SAFE_STOP, 7)
                 else exact_receipt if (source, sequence) == (stop.SOURCE_SAFE_STOP, 8)
@@ -7310,9 +7395,11 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
                 value.final.publication_for_source_sequence(
                     source=FinalIssuedCommandReceipt.SOURCE_POLICY, sequence=1)
     adapter = NS(safe_stop_sequence=1, policy_hold=True,
-        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1),
+        last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=1,
+            header=NS(stamp=NS(sec=0,nanosec=0))),
         command=None, noisy=None, set_stream_enabled=set_stream_enabled,
         tick=safety_tick,
+        node=NS(_accepted_pub=NS(wait_for_all_acked=lambda _timeout: True)),
         set_policy_hold=lambda state: (setattr(adapter, 'policy_hold', state), history.append(('hold', state))),
         scan_period_ns=(1_000_000_000 if timing == 'prebind_elapsed_deadline'
             else 100_000_000), physics_step_ns=10_000_000,
@@ -7354,6 +7441,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
         return None
     value.final = NS(publisher_instance_id=55, last_publication=NS(source=CommandEnvelope.SOURCE_SAFE_STOP,
         source_instance_id=44, sequence=1, final_publish_sequence=2),
+        publication_for_output=lambda output: prior_safe_stop_receipt,
         publication_for_source_sequence=publication_for_source_sequence)
     value.ingress.lifecycle = life
     value.ingress.last_published_sample_sequence = 1

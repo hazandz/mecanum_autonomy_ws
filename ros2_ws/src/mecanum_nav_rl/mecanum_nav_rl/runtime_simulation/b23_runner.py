@@ -2741,14 +2741,36 @@ async def drain_final_publication_before_close(
     the route under test to close it.
     """
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
     adapter.set_stream_enabled(False)
     output = adapter.last_output
     if output is None or output.source not in (
             CommandEnvelope.SOURCE_POLICY, CommandEnvelope.SOURCE_SAFE_STOP):
         raise RuntimeError('cannot bind the last Safety output before close')
-    receipt = await io.until(lambda: io.final.publication_for_source_sequence(
-        source=output.source, sequence=output.sequence),
-        deadline_ns=deadline_ns, phase='last Safety output receipt before close')
+    # A source sequence can have more than one final publication (for example,
+    # periodic Safety ticks can republish the still-current POLICY candidate).
+    # Waiting for any receipt with that sequence is insufficient: a later
+    # timestamped receipt may still be queued in the native gate.  First fence
+    # the reliable Safety writer after stream disable, then join the exact last
+    # Safety output by source identity, sequence, lifecycle, stamp and twist.
+    publisher = getattr(getattr(adapter, 'node', None), '_accepted_pub', None)
+    wait_for_all_acked = getattr(publisher, 'wait_for_all_acked', None)
+    if not callable(wait_for_all_acked):
+        raise RuntimeError('Safety output publisher acknowledgement is unavailable')
+    remaining_ns = deadline_ns - io.now()
+    if remaining_ns <= 0:
+        raise TimeoutError('last Safety output acknowledgement deadline expired')
+    from rclpy.duration import Duration
+    acknowledged = await asyncio.to_thread(
+        wait_for_all_acked, Duration(nanoseconds=remaining_ns))
+    if acknowledged is not True:
+        raise TimeoutError('last Safety output was not acknowledged before close')
+    io.emit('SAFETY_OUTPUT_WRITER_ACKED', {
+        'source': output.source, 'source_instance_id': output.source_instance_id,
+        'source_sequence': output.sequence,
+        'stamp_ns': stamp_ns(output.header.stamp), 'steady_ns': io.now()})
+    receipt = await io.until(lambda: io.final.publication_for_output(output),
+        deadline_ns=deadline_ns, phase='exact last Safety output receipt before close')
     if receipt.source == CommandEnvelope.SOURCE_SAFE_STOP:
         application = await await_r02g_exact_safe_stop_application(
             io, receipt=receipt, deadline_ns=deadline_ns,
@@ -3265,6 +3287,52 @@ class FinalPublicationView:
                         or receipt.final_publish_sequence != view.final_publish_sequence):
                     raise RuntimeError('retained receipt bytes do not match the pinned view')
                 return receipt
+        return None
+
+    def publication_for_output(self, output):
+        """Join one exact Safety envelope to its retained publisher receipt."""
+        from rclpy.serialization import deserialize_message
+        from mecanum_nav_rl_interfaces.msg import CommandEnvelope, FinalIssuedCommandReceipt
+        from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+        from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
+        if self.ingress is None or output is None:
+            return None
+        expected = {CommandEnvelope.SOURCE_POLICY: ReceiptSource.POLICY,
+            CommandEnvelope.SOURCE_SAFE_STOP: ReceiptSource.SAFE_STOP}.get(output.source)
+        if expected is None or type(output.sequence) is not int or output.sequence <= 0:
+            return None
+        lifecycle = (output.episode_generation, output.reset_epoch, output.runtime_generation)
+        stamp = stamp_ns(output.header.stamp)
+        command = (output.twist.linear.x, output.twist.linear.y, output.twist.angular.z)
+        with self.ingress.lock:
+            retained_views = tuple(self.ingress.receipts)
+            retained_bytes = dict(self.ingress._receipt_bytes)
+        for view in reversed(retained_views):
+            if (view.source is not expected
+                    or view.source_sequence != output.sequence
+                    or view.source_instance_id != output.source_instance_id
+                    or view.final_publisher_instance_id != self.publisher_instance_id
+                    or (view.lifecycle.episode_generation, view.lifecycle.reset_epoch,
+                        view.lifecycle.runtime_generation) != lifecycle
+                    or view.publish_stamp_ns != stamp
+                    or view.final_command != command):
+                continue
+            raw = retained_bytes.get(view.final_publish_sequence)
+            if raw is None:
+                raise RuntimeError('exact Safety output receipt bytes are not retained')
+            receipt = deserialize_message(raw, FinalIssuedCommandReceipt)
+            if (receipt.final_publisher_instance_id != self.publisher_instance_id
+                    or receipt.source != output.source
+                    or receipt.sequence != output.sequence
+                    or receipt.source_instance_id != output.source_instance_id
+                    or (receipt.episode_generation, receipt.reset_epoch,
+                        receipt.runtime_generation) != lifecycle
+                    or stamp_ns(receipt.header.stamp) != stamp
+                    or (receipt.final_command.linear.x, receipt.final_command.linear.y,
+                        receipt.final_command.angular.z) != command
+                    or receipt.final_publish_sequence != view.final_publish_sequence):
+                raise RuntimeError('retained receipt bytes do not match the exact Safety output')
+            return receipt
         return None
 
 
