@@ -10772,7 +10772,9 @@ def launch_packet(args):
     write_record_once(root/'evidence-manifest.json', {'schema':'b23_evidence_manifest/v1',
         'run_id':packet['run_id'],'source_commit':packet['source_commit'],
         'packet_sha256':args.packet_sha256,'files':hashes,'guard_files':guard_hashes})
-    print(json.dumps(assessment))
+    # Keep stdout stable: controller.stdout.log is included in the manifest,
+    # which is sealed before this function returns. The assessment is already
+    # persisted as r01a-assessment.json and the exit status carries success.
     return 0 if success else 1
 
 

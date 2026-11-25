@@ -9528,6 +9528,13 @@ def test_b23_evidence_root_allows_only_canonical_or_fixed_internal_root(tmp_path
             local_root=local, home_root=home)
 
 
+def test_controller_manifest_does_not_hash_later_stdout_assessment():
+    import inspect
+    tree = ast.parse(inspect.getsource(runner_module.launch_packet))
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == 'print' for node in ast.walk(tree))
+
+
 def test_residue_revalidation_rejects_present_pinned_process_identity(tmp_path):
     from mecanum_nav_rl.runtime_simulation.b23_runner import verify_residue_revalidation_attestation
 
