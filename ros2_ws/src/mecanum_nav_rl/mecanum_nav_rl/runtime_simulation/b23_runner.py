@@ -2775,8 +2775,8 @@ async def await_r02g_exact_safe_stop_application(io, *, receipt, deadline_ns, ro
 
 
 def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt,
-        safe_stop_receipt, safe_stop_application):
-    """Bind the exact delayed POLICY rejection to the applied inhibited SAFE_STOP."""
+        safe_stop_receipt=None, safe_stop_application=None, rejection_rows=None):
+    """Bind the exact delayed POLICY close to native revocation or a newer zero."""
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     if case != 'R02d':
         raise ValueError('fault-based delayed receipt verification is only valid for R02d')
@@ -2785,20 +2785,43 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt,
     held = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_HELD'
         and row.get('fields', {}).get('sequence') == str(receipt.final_publish_sequence)
         and row.get('fields', {}).get('source_sequence') == str(step_index)]
-    reason = 'admission_inhibited'
+    release_reason = 'admission_inhibited'
     released = [row for row in rows if row.get('kind') == 'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE'
         and row.get('fields', {}).get('sequence') == str(receipt.final_publish_sequence)
-        and row.get('fields', {}).get('reason') == reason]
+        and row.get('fields', {}).get('reason') == release_reason]
     if len(held) != 1 or len(released) != 1:
         raise RuntimeError(f'{case} lacks exact native hold/release evidence')
     held_ns = int(held[0]['fields']['receive_ns'])
     release_ns = int(released[0]['fields']['receive_ns'])
     if release_ns < held_ns:
         raise RuntimeError(f'{case} release predates native receipt hold')
-    rejected = r02d_held_receipt_rejection_rows(rows, receipt=receipt,
-        step_index=step_index)
+    rejected = (rejection_rows if rejection_rows is not None else
+        r02d_held_receipt_rejection_rows(rows, receipt=receipt, step_index=step_index))
     if len(rejected) != 1 or int(rejected[0]['fields']['steady_ns']) < release_ns:
-        raise RuntimeError(f'{case} lacks exact native old-sequence rejection after release')
+        raise RuntimeError(f'{case} lacks exact native fail-closed disposition after release')
+    rejection_reason = rejected[0]['fields']['reason']
+    if rejection_reason == 'policy_admission_revoked':
+        state = rejected[0].get('_verified_backend_state', io.ingress.backend_state)
+        from mecanum_nav_rl_interfaces.msg import SimulationContactState
+        expected_faults = (SimulationContactState.FAULT_COMMAND_SEQUENCE,
+            SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
+        if (state is None or state.fault_flags not in expected_faults
+                or not state.local_zero_override or not state.actuator_inhibited
+                or state.applied_receipt_valid):
+            raise RuntimeError(f'{case} revoked POLICY admission did not retain native zero override')
+        if io.ingress.policy_application_for_receipt(receipt) is not None:
+            raise RuntimeError(f'{case} revoked POLICY receipt appears in backend application ledger')
+        if any(name == 'POLICY_STEP_COMPLETE' and facts.get('step_index') == step_index
+               for name, facts in io.events):
+            raise RuntimeError(f'{case} created a B1 commit for the canceled POLICY step')
+        return {'case':case, 'held_final_publish_sequence':receipt.final_publish_sequence,
+            'held_receive_ns':held_ns, 'release_receive_ns':release_ns,
+            'release_reason':release_reason, 'native_rejection':rejection_reason,
+            'native_fault_flags':state.fault_flags, 'local_zero_override':True,
+            'actuator_inhibited':True, 'policy_backend_applied':False,
+            'b1_transition_committed':False}
+    if rejection_reason != 'replay_or_old_sequence':
+        raise RuntimeError(f'{case} held POLICY receipt has unexpected disposition {rejection_reason!r}')
     if (safe_stop_receipt is None or safe_stop_application is None
             or safe_stop_application.get('state') is None):
         raise RuntimeError(f'{case} lacks exact applied closing SAFE_STOP evidence')
@@ -2822,8 +2845,9 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt,
            for name, facts in io.events):
         raise RuntimeError(f'{case} created a B1 commit for the canceled POLICY step')
     return {'case':case, 'held_final_publish_sequence':receipt.final_publish_sequence,
-        'held_receive_ns':held_ns, 'release_receive_ns':release_ns, 'release_reason':reason,
-        'native_rejection':rejected[0]['fields']['reason'],
+        'held_receive_ns':held_ns, 'release_receive_ns':release_ns,
+        'release_reason':release_reason,
+        'native_rejection':rejection_reason,
         'native_fault_flags':state.fault_flags, 'local_zero_override':False,
         'safe_stop_final_publish_sequence':safe_stop_receipt.final_publish_sequence,
         'safe_stop_applied_ns':safe_stop_application.get('received_ns'),
@@ -2951,30 +2975,51 @@ def r02_held_policy_receipt_from_ledger(io, *, held_row, step_index, transition_
 
 
 def r02d_held_receipt_rejection_rows(rows, *, receipt, step_index):
-    """Select the exact old-sequence rejection for R02d's held real receipt."""
+    """Select the exact fail-closed disposition for R02d's held receipt."""
     return [row for row in rows
         if row.get('kind') == 'B23_RECEIPT_GATE_RESULT'
-        and row.get('fields', {}).get('disposition') == '5'
-        and row.get('fields', {}).get('reason') == 'replay_or_old_sequence'
+        and ((row.get('fields', {}).get('disposition') == '5'
+              and row.get('fields', {}).get('reason') == 'replay_or_old_sequence'
+              and int(row.get('fields', {}).get('watermark', '0'))
+                  >= receipt.final_publish_sequence)
+             or (row.get('fields', {}).get('disposition') == '6'
+                 and row.get('fields', {}).get('reason') == 'policy_admission_revoked'))
         and row.get('fields', {}).get('key') == str(receipt.final_publish_sequence)
         and row.get('fields', {}).get('source') == '1'
-        and row.get('fields', {}).get('source_sequence') == str(step_index)
-        and int(row.get('fields', {}).get('watermark', '0'))
-            >= receipt.final_publish_sequence]
+        and row.get('fields', {}).get('source_sequence') == str(step_index)]
 
 
 async def await_r02_late_receipt_close(io, *, release_predicate, receipt, step_index,
         deadline_ns):
-    """Wait for exact late-receipt replay rejection after the close marker."""
+    """Wait for an exact old-sequence or revoked-admission disposition."""
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    allowed_faults = (0, SimulationContactState.FAULT_COMMAND_SEQUENCE,
+        SimulationContactState.FAULT_COMMAND_STALE,
+        SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
     await io.until(release_predicate, deadline_ns=deadline_ns,
         phase='held POLICY receipt released only after closing condition',
-        expected_native_fault_flags=0)
-    return await io.until(lambda: r02d_held_receipt_rejection_rows(
+        expected_native_fault_flags=allowed_faults)
+    rejection = await io.until(lambda: r02d_held_receipt_rejection_rows(
         complete_jsonl_rows(io.descriptor['native_events_path']),
         receipt=receipt, step_index=step_index),
         deadline_ns=deadline_ns,
-        phase='exact native old-sequence rejection after late POLICY receipt',
-        expected_native_fault_flags=0)
+        phase='exact native fail-closed disposition after late POLICY receipt',
+        expected_native_fault_flags=allowed_faults)
+    if len(rejection) != 1:
+        raise RuntimeError('R02d expected one exact native held-receipt disposition')
+    if rejection[0]['fields']['reason'] == 'policy_admission_revoked':
+        state = await io.until(lambda: io.ingress.backend_state
+            if io.ingress.backend_state is not None
+            and io.ingress.backend_state.fault_flags in (
+                SimulationContactState.FAULT_COMMAND_SEQUENCE,
+                SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
+            and io.ingress.backend_state.local_zero_override
+            and io.ingress.backend_state.actuator_inhibited else None,
+            deadline_ns=deadline_ns,
+            phase='R02d revoked admission native zero override',
+            expected_native_fault_flags=allowed_faults)
+        rejection[0]['_verified_backend_state'] = state
+    return rejection
 
 
 async def await_r02_held_policy_receipt(io, *, held_predicate, deadline_ns):
@@ -7059,6 +7104,15 @@ class TrainingWorkerIO:
             policy_receipt = await self.tick_policy_after_deferred_scan_cutoff(
                 deadline_ns=deadline, step_index=token.step_index,
                 sample_sequence=target_sample_sequence)
+            if close_after_held_receipt == 'admission_inhibited':
+                # The native hold marker is emitted before its receipt callback
+                # returns, while this worker observes the publisher receipt.
+                # Close admission immediately here; waiting to parse the native
+                # marker first can consume the remaining 100 ms receipt-watchdog
+                # budget and turn the intended revocation check into a stale fault.
+                self.safety.local_training.set_policy_hold(True)
+                self.safety.local_training.set_stream_enabled(True)
+                self.ingress.inhibit()
             expected_mode = ('hold_policy_until_safe_stop' if close_after_held_receipt == 'safe_stop'
                 else 'hold_policy_until_inhibit')
             def held_row():
@@ -7078,9 +7132,10 @@ class TrainingWorkerIO:
                 'same_publication':policy_receipt.final_publish_sequence == selected_policy_publish_sequence,
                 'step_index':token.step_index, 'transition_id':token.transition_id,
                 'steady_ns':self.now()})
-            self.safety.local_training.set_policy_hold(True)
-            self.safety.local_training.set_stream_enabled(True)
-            self.ingress.inhibit()
+            if close_after_held_receipt == 'safe_stop':
+                self.safety.local_training.set_policy_hold(True)
+                self.safety.local_training.set_stream_enabled(True)
+                self.ingress.inhibit()
             expected_reason = close_after_held_receipt
             def released_row():
                 rows = complete_jsonl_rows(self.descriptor['native_events_path'])
@@ -7113,9 +7168,19 @@ class TrainingWorkerIO:
                     **checked, 'b1_abort_status':str(aborted.status), 'steady_ns':self.now()})
                 return {'expected_rejection':True, 'policy_issued':True, **checked,
                     'b1_step_aborted':True, 'transition_id':token.transition_id}
-            await await_r02_late_receipt_close(self,
+            rejection_rows = await await_r02_late_receipt_close(self,
                 release_predicate=released_row, receipt=policy_receipt,
                 step_index=token.step_index, deadline_ns=deadline)
+            rejection_reason = rejection_rows[0]['fields']['reason']
+            if rejection_reason == 'policy_admission_revoked':
+                checked = verify_r02_late_receipt_rejected(self, case='R02d',
+                    step_index=token.step_index, receipt=policy_receipt,
+                    rejection_rows=rejection_rows)
+                aborted = b1.lifecycle.abort_step('R02_late_policy_receipt_after_close')
+                self.emit('R02_LATE_POLICY_RECEIPT_REJECTED', {
+                    **checked, 'b1_abort_status':str(aborted.status), 'steady_ns':self.now()})
+                return {'expected_rejection':True, 'policy_issued':True, **checked,
+                    'b1_step_aborted':True, 'transition_id':token.transition_id}
             from mecanum_nav_rl_interfaces.msg import CommandEnvelope
             closing_stop = await self.until(lambda: self.safety.local_training.last_output
                 if self.safety.local_training.last_output is not None

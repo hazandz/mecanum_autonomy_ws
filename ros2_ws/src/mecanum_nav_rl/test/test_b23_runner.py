@@ -6967,6 +6967,27 @@ def test_r02_late_receipt_path_runs_immediate_production_safety_tick_before_hold
         for node in statements)
 
 
+def test_r02d_inhibits_before_waiting_for_native_hold_marker():
+    import ast
+    import inspect
+    import textwrap
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+
+    tree=ast.parse(textwrap.dedent(inspect.getsource(TrainingWorkerIO.policy_step)))
+    close_branch=next(node for node in ast.walk(tree)
+        if isinstance(node,ast.If) and ast.unparse(node.test)=='close_after_held_receipt is not None')
+    inhibit_line=next(node.lineno for node in ast.walk(close_branch)
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+        and node.func.attr=='inhibit' and isinstance(node.func.value,ast.Attribute)
+        and node.func.value.attr=='ingress')
+    held_wait_line=next(node.lineno for node in ast.walk(close_branch)
+        if isinstance(node,ast.Await) and isinstance(node.value,ast.Call)
+        and isinstance(node.value.func,ast.Name)
+        and node.value.func.id=='await_r02_held_policy_receipt')
+    assert inhibit_line < held_wait_line, (
+        'R02d must close admission before worker-side native marker parsing consumes watchdog time')
+
+
 @pytest.mark.parametrize('timing', ['ready','near_scan_cutoff','late_commit','late_publish','r09b_callback',
     'r09b_before_bind','candidate_after_admission','pending_cutoff_dedup',
     'nominal_issued_cutoff','prebind_elapsed_deadline',
@@ -9181,7 +9202,7 @@ def test_r02d_late_policy_receipt_requires_exact_old_sequence_rejection_and_inhi
     wrong_sequence = dict(rows[2])
     wrong_sequence['fields'] = {**rows[2]['fields'],'key':'54'}
     native.write_text('\n'.join(json.dumps(row) for row in rows[:2]+[wrong_sequence])+'\n')
-    with pytest.raises(RuntimeError,match='exact native old-sequence rejection'):
+    with pytest.raises(RuntimeError,match='exact native fail-closed disposition'):
         verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,receipt=receipt,
             safe_stop_receipt=safe_stop,safe_stop_application={'state':state,'received_ns':350})
 
@@ -9195,6 +9216,41 @@ def test_r02d_late_policy_receipt_requires_exact_old_sequence_rejection_and_inhi
     with pytest.raises(RuntimeError,match='backend application ledger'):
         verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,receipt=receipt,
             safe_stop_receipt=safe_stop,safe_stop_application={'state':state,'received_ns':350})
+
+
+def test_r02d_inhibited_admission_rejects_exact_held_policy_with_native_zero_override(tmp_path):
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r02_late_receipt_rejected
+    native=tmp_path/'native-events.jsonl'
+    rows=[
+        {'kind':'B23_POLICY_RECEIPT_HELD','fields':{
+            'sequence':'52','source_sequence':'1','receive_ns':'100'}},
+        {'kind':'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE','fields':{
+            'sequence':'52','source_sequence':'1','reason':'admission_inhibited','receive_ns':'200'}},
+        {'kind':'B23_RECEIPT_GATE_RESULT','fields':{
+            'disposition':'6','reason':'policy_admission_revoked','key':'52',
+            'source':'1','source_sequence':'1','watermark':'51','steady_ns':'300'}},]
+    native.write_text('\n'.join(json.dumps(row) for row in rows)+'\n')
+    receipt=NS(final_publish_sequence=52,final_publisher_instance_id=81)
+    state=NS(fault_flags=SimulationContactState.FAULT_COMMAND_SEQUENCE,
+        local_zero_override=True,actuator_inhibited=True,applied_receipt_valid=False)
+    io=NS(descriptor={'native_events_path':str(native)},
+        ingress=NS(backend_state=state,policy_application_for_receipt=lambda _r:None),events=[])
+    checked=verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,
+        receipt=receipt,rejection_rows=[{**rows[2], '_verified_backend_state':state}])
+    assert checked['native_rejection']=='policy_admission_revoked'
+    assert checked['native_fault_flags']==SimulationContactState.FAULT_COMMAND_SEQUENCE
+    assert checked['local_zero_override'] is True
+    assert checked['actuator_inhibited'] is True
+    assert checked['policy_backend_applied'] is False
+    assert checked['b1_transition_committed'] is False
+
+    wrong=NS(fault_flags=0,local_zero_override=False,actuator_inhibited=True,
+        applied_receipt_valid=False)
+    io.ingress.backend_state=wrong
+    with pytest.raises(RuntimeError,match='native zero override'):
+        verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,
+            receipt=receipt,rejection_rows=[{**rows[2], '_verified_backend_state':wrong}])
 
 
 def test_r02c_safe_stop_close_requires_exact_inhibited_zero_and_canceled_policy(tmp_path):
