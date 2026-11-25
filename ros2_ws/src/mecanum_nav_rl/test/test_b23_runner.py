@@ -4696,34 +4696,60 @@ def test_r04d_ingress_lifecycle_delivery_is_delayed_on_owned_pump():
         assert io._r04d_pending_ingress_lifecycle is None
 
 
-def test_r04d_wait_tolerates_only_receipt_watchdog_while_native_zero_is_active():
+def test_r04d_wait_tolerates_only_bound_lifecycle_and_watchdog_faults_while_zero_is_active():
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_expected_native_fault_flags
 
-    expected = SimulationContactState.FAULT_COMMAND_STALE
-    assert r04d_expected_native_fault_flags() == expected
-    value, clock = worker()
-    state = NS(fault_flags=expected, local_zero_override=True,
-        actuator_inhibited=True, status_sequence=17, physics_iteration=42)
-    value.ingress.backend_state = state
-    assert asyncio.run(value.until(lambda: state
-        if state.local_zero_override and state.actuator_inhibited else None,
-        deadline_ns=clock.ns + 5_000_000, phase='R04d expected fail-closed zero',
-        expected_native_fault_flags=expected)) is state
+    expected = r04d_expected_native_fault_flags()
+    assert expected == (SimulationContactState.FAULT_COMMAND_STALE,
+        SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE)
+    for expected_flag in expected:
+        value, clock = worker()
+        state = NS(fault_flags=expected_flag, local_zero_override=True,
+            actuator_inhibited=True, status_sequence=17, physics_iteration=42)
+        value.ingress.backend_state = state
+        assert asyncio.run(value.until(lambda: state
+            if state.local_zero_override and state.actuator_inhibited else None,
+            deadline_ns=clock.ns + 5_000_000, phase='R04d expected fail-closed zero',
+            expected_native_fault_flags=expected)) is state
 
     value, clock = worker()
-    value.ingress.backend_state = NS(fault_flags=expected | SimulationContactState.FAULT_CLOCK,
+    value.ingress.backend_state = NS(fault_flags=SimulationContactState.FAULT_COMMAND_STALE |
+        SimulationContactState.FAULT_CLOCK,
         local_zero_override=True, actuator_inhibited=True)
     with pytest.raises(RuntimeError, match='native fault flags=68'):
         asyncio.run(value.until(lambda: None, deadline_ns=clock.ns + 5_000_000,
             phase='R04d unexpected fault', expected_native_fault_flags=expected))
 
     value, clock = worker()
-    value.ingress.backend_state = NS(fault_flags=expected,
+    value.ingress.backend_state = NS(fault_flags=SimulationContactState.FAULT_COMMAND_STALE,
         local_zero_override=False, actuator_inhibited=False)
     with pytest.raises(TimeoutError, match='deadline expired'):
         asyncio.run(value.until(lambda: None, deadline_ns=clock.ns + 5_000_000,
             phase='R04d fault without native zero', expected_native_fault_flags=expected))
+
+
+def test_r04d_composite_fault_requires_the_exact_released_new_context_zero_receipt():
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_lifecycle_mismatch_fault_evidence
+
+    released = [{'identity':[2,2,2],'source_sequence':81,'received_ns':520,
+        'delivery_ns':530}]
+    gate = [{'kind':'B23_RECEIPT_GATE_RESULT','collected_ns':550,'fields':{
+        'reason':'lifecycle_mismatch','disposition':'6','source':'4','key':'81',
+        'source_sequence':'81','watermark':'80','steady_ns':'540'}}]
+    result = r04d_lifecycle_mismatch_fault_evidence(gate, released,
+        baseline_identity=[1,1,2],after_ns=500)
+    assert result == {'source_sequence':81,'publish_sequence':81,
+        'baseline_identity':[1,1,2],'receipt_identity':[2,2,2],
+        'released_ns':530,'gate_ns':540,'reason':'lifecycle_mismatch','watermark':80}
+    assert r04d_lifecycle_mismatch_fault_evidence(gate, [],
+        baseline_identity=[1,1,2],after_ns=500) is None
+    assert r04d_lifecycle_mismatch_fault_evidence(
+        [{**gate[0],'fields':{**gate[0]['fields'],'source':'1'}}], released,
+        baseline_identity=[1,1,2],after_ns=500) is None
+    assert r04d_lifecycle_mismatch_fault_evidence(
+        [{**gate[0],'fields':{**gate[0]['fields'],'reason':'final_publication_sequence_gap'}}],
+        released,baseline_identity=[1,1,2],after_ns=500) is None
 
 
 def test_r04d_native_zero_inhibit_uses_bound_raw_status_even_if_later_status_changes():
@@ -4754,6 +4780,11 @@ def test_r04d_native_zero_inhibit_uses_bound_raw_status_even_if_later_status_cha
     assert r04d_native_zero_inhibit_status(
         [watchdog], backend_instance_id=71, session_id='session-a',
         config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=600) is watchdog
+    sequence_watchdog = {**base,'fault_flags':
+        SimulationContactState.FAULT_COMMAND_SEQUENCE | SimulationContactState.FAULT_COMMAND_STALE}
+    assert r04d_native_zero_inhibit_status(
+        [sequence_watchdog], backend_instance_id=71, session_id='session-a',
+        config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=600) is sequence_watchdog
     assert r04d_native_zero_inhibit_status(
         [wrong_identity], backend_instance_id=71, session_id='session-a',
         config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=600) is None

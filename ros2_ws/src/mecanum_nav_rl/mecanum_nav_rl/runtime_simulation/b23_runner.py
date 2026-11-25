@@ -1413,9 +1413,74 @@ def r04d_final_publisher_precedes_ingress(final_delivery_ns, ingress_delivery_ns
 
 
 def r04d_expected_native_fault_flags():
-    """Only the receipt watchdog fault is expected during the 650 ms delay."""
+    """Return exact fail-closed faults possible during the delayed lifecycle case.
+
+    A new-context SAFE_STOP can reach the still-baseline-bound native gate
+    before its watchdog expires. The gate rejects that receipt as a lifecycle
+    mismatch (classified as command-sequence fault); the watchdog can then add
+    COMMAND_STALE. The composite is accepted only when the raw gate event is
+    joined to the exact released SAFE_STOP below.
+    """
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
-    return SimulationContactState.FAULT_COMMAND_STALE
+    return (SimulationContactState.FAULT_COMMAND_STALE,
+        SimulationContactState.FAULT_COMMAND_SEQUENCE |
+        SimulationContactState.FAULT_COMMAND_STALE)
+
+
+def r04d_lifecycle_mismatch_fault_evidence(native_rows, released_safe_stops, *,
+        baseline_identity, after_ns):
+    """Bind a native lifecycle-mismatch gate fault to the released new-context zero.
+
+    This distinguishes the observed, expected fail-closed transition from an
+    unrelated sequence fault. It does not accept a generic fault flag or a
+    mismatch from another receipt source/context.
+    """
+    if (not isinstance(baseline_identity, (list, tuple)) or len(baseline_identity) != 3
+            or type(after_ns) is not int):
+        return None
+    released = {}
+    for item in released_safe_stops:
+        if not isinstance(item, dict):
+            continue
+        identity = item.get('identity')
+        sequence = item.get('source_sequence')
+        delivery_ns = item.get('delivery_ns')
+        received_ns = item.get('received_ns')
+        if (isinstance(identity, list) and len(identity) == 3
+                and identity != list(baseline_identity)
+                and type(sequence) is int and sequence > 0
+                and type(delivery_ns) is int and type(received_ns) is int
+                and delivery_ns >= received_ns):
+            released[sequence] = item
+    for row in native_rows:
+        if not isinstance(row, dict):
+            continue
+        fields = row.get('fields')
+        if not isinstance(fields, dict):
+            continue
+        collected_ns = row.get('collected_ns')
+        try:
+            key = int(fields.get('key'))
+            source = int(fields.get('source'))
+            sequence = int(fields.get('source_sequence'))
+            disposition = int(fields.get('disposition'))
+            watermark = int(fields.get('watermark'))
+            gate_ns = int(fields.get('steady_ns'))
+        except (TypeError, ValueError):
+            continue
+        receipt = released.get(sequence)
+        if (row.get('kind') != 'B23_RECEIPT_GATE_RESULT'
+                or fields.get('reason') != 'lifecycle_mismatch'
+                or source != 4 or disposition != 6 or key != sequence
+                or watermark != key - 1 or gate_ns <= after_ns
+                or type(collected_ns) is not int or collected_ns < gate_ns
+                or receipt is None or receipt['delivery_ns'] > gate_ns):
+            continue
+        return {'source_sequence':sequence,'publish_sequence':key,
+            'baseline_identity':list(baseline_identity),
+            'receipt_identity':receipt['identity'],'released_ns':receipt['delivery_ns'],
+            'gate_ns':gate_ns,'reason':'lifecycle_mismatch','watermark':watermark}
+    return None
 
 
 def r04d_native_zero_inhibit_status(rows, *, backend_instance_id, session_id,
@@ -1427,7 +1492,8 @@ def r04d_native_zero_inhibit_status(rows, *, backend_instance_id, session_id,
     is absent.  Later statuses may supersede the selected sample, so assess the
     exact received snapshot instead of requiring it to remain the latest.
     """
-    expected_fault = r04d_expected_native_fault_flags()
+    expected_faults = r04d_expected_native_fault_flags()
+    allowed_faults = (0, *expected_faults)
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -1438,7 +1504,7 @@ def r04d_native_zero_inhibit_status(rows, *, backend_instance_id, session_id,
                 or row.get('config_hash') != config_hash
                 or row.get('lifecycle_identity') != list(lifecycle_identity)
                 or type(row.get('fault_flags')) is not int
-                or row.get('fault_flags') not in (0, expected_fault)
+                or row.get('fault_flags') not in allowed_faults
                 or row.get('local_zero_override') is not True
                 or row.get('actuator_inhibited') is not True):
             continue
@@ -9544,6 +9610,12 @@ async def training_child(path):
                     if commit_path.exists() else 0
                 if issued_count != 0 or commit_count != prior_commits:
                     raise RuntimeError('R04d stale lifecycle fault advanced POLICY/B1')
+                lifecycle_mismatch_evidence = r04d_lifecycle_mismatch_fault_evidence(
+                    _ledger_rows(packet['run_root'], 'native-events.jsonl'), released_zero,
+                    baseline_identity=[int(baseline_lifecycle.episode_generation),
+                        int(baseline_lifecycle.reset_epoch),
+                        int(baseline_lifecycle.runtime_generation)],
+                    after_ns=marker_armed_ns)
                 native_status = r04d_native_zero_inhibit_status(
                     io._r04d_backend_statuses,
                     backend_instance_id=int(io.descriptor['backend_instance_id']),
@@ -9554,13 +9626,22 @@ async def training_child(path):
                     after_ns=marker_armed_ns)
                 if native_status is None:
                     raise RuntimeError('R04d did not observe native zero/inhibit in the pinned backend context')
+                from mecanum_nav_rl_interfaces.msg import SimulationContactState
+                composite_fault = (SimulationContactState.FAULT_COMMAND_SEQUENCE |
+                    SimulationContactState.FAULT_COMMAND_STALE)
+                if (native_status['fault_flags'] == composite_fault
+                        and lifecycle_mismatch_evidence is None):
+                    raise RuntimeError(
+                        'R04d composite native fault lacks matching released lifecycle-mismatch SAFE_STOP')
                 io.emit('R04D_NATIVE_ZERO_INHIBIT_STATUS_VERIFIED', {
                     **{key:native_status[key] for key in (
                         'backend_instance_id','session_id','config_hash','lifecycle_identity',
                         'fault_flags','local_zero_override','actuator_inhibited',
                         'status_sequence','physics_iteration','source_stamp_ns','received_ns',
                         'wire_sha256')},
-                    'watchdog_fault_present':native_status['fault_flags'] == r04d_expected_native_fault_flags(),
+                    'watchdog_fault_present':bool(native_status['fault_flags'] &
+                        SimulationContactState.FAULT_COMMAND_STALE),
+                    'lifecycle_mismatch_fault_evidence':lifecycle_mismatch_evidence,
                     'assessment_ns':io.now()})
                 outcome = {'case':'R04d','resets_confirmed':1,'policy_steps_committed':0,
                     'stale_input_disposition':rejected['disposition'],
