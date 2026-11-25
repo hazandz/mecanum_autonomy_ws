@@ -583,9 +583,35 @@ class LocalTrainingSafetyAdapter:
 
     def on_scan(self, msg):
         import copy
+        from mecanum_nav_rl.simulation.local_training_io import validate_dual_clock_freshness
+        received_ns = self.now()
         with self.lock:
             # Giữ invalid sample để tick đóng motion; không tái dùng scan cũ.
-            self.scan, self.scan_received = copy.deepcopy(msg), self.now()
+            self.scan, self.scan_received = copy.deepcopy(msg), received_ns
+            immediate_stop = False
+            source_stamp_ns = None
+            try:
+                source_stamp_ns = self.stamp(msg.header.stamp)
+                validate_dual_clock_freshness(
+                    source_ros_ns=source_stamp_ns,
+                    now_ros_ns=self.node.get_clock().now().nanoseconds,
+                    receive_steady_ns=received_ns,
+                    now_steady_ns=self.now(),
+                    max_age_ns=self.context['profile']['scan_max_age_ms'] * 1_000_000,
+                )
+            except ValueError:
+                # An out-of-order/stale scan can arrive between periodic
+                # Safety ticks. Select the existing fail-closed output now so
+                # a previously accepted POLICY envelope is not left active
+                # until the next timer callback.
+                immediate_stop = True
+                self.emit('SAFETY_STALE_SCAN_IMMEDIATE_EVALUATION', {
+                    'source_stamp_ns': source_stamp_ns,
+                    'received_steady_ns': received_ns,
+                    'scan_max_age_ns': self.context['profile']['scan_max_age_ms'] * 1_000_000,
+                })
+        if immediate_stop:
+            self.tick()
 
     def on_safety_input(self, msg):
         import copy

@@ -179,6 +179,28 @@ def test_local_safety_preserves_issuance_and_both_ttl_clocks(local_adapter):
     assert 'COMMAND_STALE_OR_FUTURE' in f.state[-1].intervention_reasons
 
 
+def test_local_safety_stale_scan_callback_publishes_stop_without_waiting_for_timer(local_adapter):
+    f = local_adapter; adapter = f.adapter
+    assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
+    f.advance()
+    assert adapter.tick().source == f.candidate.SOURCE_POLICY
+
+    # Keep every non-scan input fresh while the delivered scan remains older
+    # than the configured scan-age limit.
+    f.advance(600_000_000)
+    for message in (adapter.command, adapter.life, adapter.noisy, adapter.status):
+        message.header.stamp = f.stamp(f.clock.ros)
+    adapter.command_received = adapter.life_received = adapter.noisy_received = (
+        adapter.status_received) = f.clock.steady
+    before = len(f.published)
+
+    adapter.on_scan(f.scan)
+
+    assert len(f.published) == before + 1
+    assert f.published[-1].source == f.published[-1].SOURCE_SAFE_STOP
+    assert 'SCAN_STALE_OR_FUTURE' in f.state[-1].intervention_reasons
+
+
 def test_local_safety_defers_only_normal_output_at_exact_scan_cutoff(local_adapter):
     f = local_adapter; adapter = f.adapter
     assert adapter.tick().source == f.candidate.SOURCE_SAFE_STOP
