@@ -6785,10 +6785,21 @@ class TrainingWorkerIO:
         POLICY đang chờ. Sau khi drain, tiếp tục giữ zero SAFE_STOP sống khi
         chờ bind slot mới.
         """
-        from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+        from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput
         adapter = self.safety.local_training
         previous_safe_stop = adapter.safe_stop_sequence
         adapter.set_policy_hold(True)
+        # Keep the already-bound slot's SafetyInput fresh while the reliable
+        # final-output writer is fenced below. This republishes only the same
+        # current admission token from newer producer samples; policy hold
+        # prevents another POLICY command. Without this refresh, the bounded
+        # writer-ACK drain can age the retained 250 ms admission past its
+        # contract before the closing inhibited input reaches the backend.
+        if (getattr(self.ingress, 'pending_ack', None) is not None
+                and getattr(self.ingress, 'admission_state', None)
+                    == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                and not getattr(self.ingress, 'admission_publication_enabled', False)):
+            self.ingress.resume_admission_publication()
         if adapter.last_output is not None:
             await drain_final_publication_before_close(
                 self, adapter, deadline_ns=deadline_ns,

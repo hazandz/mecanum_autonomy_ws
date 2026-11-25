@@ -7472,6 +7472,13 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     value.safety = NS(local_training=adapter)
     value.ingress.last_published_sample_sequence = 9
     value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+    value.ingress.pending_ack = object() if last_source == 'policy' else None
+    value.ingress.admission_state = (LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+        if last_source == 'policy' else LocalTrainingSafetyInput.ADMISSION_INHIBITED)
+    value.ingress.admission_publication_enabled = False
+    value.ingress.resume_admission_publication = lambda: (
+        calls.append(('resume_current_admission',)),
+        setattr(value.ingress, 'admission_publication_enabled', True))
     def inhibit(*, zero_only=False):
         calls.append(('inhibit', zero_only))
         value.ingress.last_published_admission_state = (LocalTrainingSafetyInput.ADMISSION_ZERO_ONLY
@@ -7545,6 +7552,10 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
     assert calls.index(('stream', False)) < calls.index(('stream', True))
     assert calls.index(('writer_ack', 20_000_000)) < calls.index(('inhibit', False))
+    if last_source == 'policy':
+        assert calls.index(('resume_current_admission',)) < calls.index(('writer_ack', 20_000_000))
+    else:
+        assert ('resume_current_admission',) not in calls
     event_names = [name for name, _ in events]
     assert event_names.index('SAFETY_OUTPUT_WRITER_ACKED') < event_names.index(
         'STEP_PRE_CLOSE_OUTPUT_DRAINED')
