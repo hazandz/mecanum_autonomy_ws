@@ -6350,7 +6350,8 @@ class TrainingWorkerIO:
         return receipt, application['state'], application['received_ns']
 
     async def align_policy_step_launch_window(self, *, deadline_ns, zero_witness,
-            launch_window_ns=(70_000_000, 90_000_000), force_alignment=False):
+            launch_window_ns=(70_000_000, 90_000_000), receipt_window_ns=None,
+            force_alignment=False):
         """Giữ SAFE_STOP sống nếu bind muộn trong scan period.
 
         Sau khi bind slot, SAFE_STOP mới sẽ thu hồi admission. Vì vậy chỉ
@@ -6366,6 +6367,14 @@ class TrainingWorkerIO:
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
         adapter = self.safety.local_training
         period_ns = adapter.scan_period_ns
+        receipt_window_ns = (launch_window_ns if receipt_window_ns is None
+            else receipt_window_ns)
+        if (not isinstance(receipt_window_ns, (tuple, list))
+                or len(receipt_window_ns) != 2
+                or any(type(value) is not int or value < 0 for value in receipt_window_ns)
+                or receipt_window_ns[0] > receipt_window_ns[1]
+                or receipt_window_ns[1] >= period_ns):
+            raise ValueError('SAFE_STOP receipt selection window must fit inside scan period')
         now_ros_ns = self.ros_now()
         # Safety defers a normal tick stamped exactly on a cutoff. Treat that
         # instant as the closed edge of the current window, not as a fresh
@@ -6410,7 +6419,7 @@ class TrainingWorkerIO:
                 phase = receipt.publish_stamp_ns % period_ns
                 remaining_to_cutoff = period_ns - phase if phase else 0
                 if not policy_bind_launch_window_ready(
-                        remaining_to_cutoff, window_ns=launch_window_ns):
+                        remaining_to_cutoff, window_ns=receipt_window_ns):
                     continue
                 current_ros_ns = self.ros_now()
                 # A matching phase modulo ``period_ns`` is not enough: a
@@ -6425,7 +6434,7 @@ class TrainingWorkerIO:
                 current_remaining_ns = policy_bind_launch_window_remaining_ns(
                     current_ros_ns, period_ns)
                 if not policy_bind_launch_window_ready(
-                        current_remaining_ns, window_ns=launch_window_ns):
+                        current_remaining_ns, window_ns=receipt_window_ns):
                     continue
                 publication = self.final.publication_for_source_sequence(
                     source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
@@ -6473,6 +6482,8 @@ class TrainingWorkerIO:
             'prior_applied_zero_received_ns':zero_witness['received_ns'],
             'remaining_to_cutoff_ns':aligned['remaining_to_cutoff_ns'],
             'remaining_to_next_cutoff_ns':period_ns - (self.ros_now() % period_ns),
+            'receipt_selection_window_ns':list(receipt_window_ns),
+            'application_bind_window_ns':list(launch_window_ns),
             'receipt_scan_window':aligned['receipt'].publish_stamp_ns // period_ns,
             'current_scan_window':self.ros_now() // period_ns,
             'steady_ns':self.now()})
@@ -7056,7 +7067,13 @@ class TrainingWorkerIO:
                 else:
                     zero_witness = await self.align_policy_step_launch_window(
                         deadline_ns=deadline, zero_witness=zero_witness,
-                        launch_window_ns=(70_000_000, 90_000_000))
+                        launch_window_ns=(70_000_000, 90_000_000),
+                        # Native applies the SAFE_STOP on a later physics
+                        # update and the status callback reaches this worker
+                        # after another measured 10-30 ms. Select the receipt
+                        # earlier in the same scan period so the unchanged
+                        # 70-90 ms application/bind window remains open.
+                        receipt_window_ns=(80_000_000, 99_000_000))
                 # The scan-window witness may already be several Safety ticks
                 # old by the time the ACK and first post-ACK sample arrive.
                 # R08 showed that a witness fresh at bind could age past the

@@ -1380,6 +1380,86 @@ def test_policy_step_keeps_current_zero_witness_when_measured_launch_window_is_o
         deadline_ns=2_000_000_000,zero_witness=witness)) is witness
 
 
+def test_policy_bind_selects_safe_stop_before_required_application_window(tmp_path):
+    """Select receipt early enough that its exact application remains in the bind window."""
+    from mecanum_nav_rl.core.issued_command_cutoff import (
+        IssuedCommandReceiptView, ReceiptSource,
+    )
+    from mecanum_nav_rl.core.lifecycle_types import EpisodeLifecycleIdentity
+    from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
+    from mecanum_nav_rl.runtime_simulation.local_training_ingress import lifecycle_identity
+
+    worker=object.__new__(TrainingWorkerIO)
+    clock={'ros_ns':4_400_000_000,'steady_ns':500}
+    life=EpisodeLifecycleIdentity(1,2,3)
+    identity=lifecycle_identity(life)
+    def receipt(sequence,stamp):
+        return IssuedCommandReceiptView(stamp,77,sequence,ReceiptSource.SAFE_STOP,
+            88,sequence,0,'',life,'session','a'*64,(0.,0.,0.),sequence,'base_link',True)
+    old,selected=receipt(1,4_390_000_000),receipt(2,4_410_000_000)
+    state=NS(fault_flags=0,paused=False,local_zero_override=False,
+        applied_receipt_valid=True,applied_final_publisher_instance_id=77,
+        applied_final_publish_sequence=2,backend_instance_id=99,
+        session_id='session',config_hash='a'*64,episode_generation=1,
+        reset_epoch=2,runtime_generation=3,applied_physics_iteration=442,
+        physics_iteration=442,applied_sim_stamp=NS(sec=4,nanosec=420_000_000),
+        header=NS(stamp=NS(sec=4,nanosec=420_000_000)))
+    publication=NS(final_publisher_instance_id=77,final_publish_sequence=2,
+        source=FinalIssuedCommandReceipt.SOURCE_SAFE_STOP,
+        final_command=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))
+    ingress=NS(receipts=[old],backend_state=state,lifecycle=life,
+        application_for_receipt=lambda view:({'state':state,'received_ns':600}
+            if view.final_publish_sequence==2 else None),
+        receipt_for_publication_sequence=lambda seq:selected if seq==2 else None)
+    worker.ingress=ingress
+    worker.final=NS(publisher_instance_id=77,
+        publication_for_source_sequence=lambda *,source,sequence:publication
+            if source==FinalIssuedCommandReceipt.SOURCE_SAFE_STOP and sequence==2 else None)
+    native_path=tmp_path/'native-events.jsonl'
+    worker.descriptor={'session_id':'session','config_hash':'a'*64,
+        'backend_instance_id':99,'native_events_path':str(native_path),
+        'server_leader_pid':777,'invocation_id':'inv-1'}
+    worker._native_offset=0; worker._native_partial=b''
+    worker._native_input_watermark=0; worker._native_safe_stop_ingress={}
+    worker.safety=NS(local_training=NS(scan_period_ns=100_000_000))
+    worker.ros_now=lambda:clock['ros_ns']; worker.now=lambda:clock['steady_ns']
+    events=[]; worker.emit=lambda name,facts:events.append((name,facts))
+    waits=[]
+
+    async def until(predicate,*,deadline_ns,phase,poll_interval_s=0.002):
+        waits.append(phase)
+        if phase=='post-cutoff native SAFE_STOP ingress with POLICY bind window':
+            clock.update(ros_ns=4_410_000_000,steady_ns=550)
+            ingress.receipts.append(selected)
+            row={'kind':'B23_SAFE_STOP_RECEIPT_INGRESS','server_leader_pid':777,
+                'invocation_id':'inv-1','fields':{'publisher':'77','key':'2',
+                'source_sequence':'2','stamp_ns':'4410000000','receive_ns':'550'}}
+            native_path.write_text(json.dumps(row)+'\n')
+            return predicate()
+        assert phase=='exact post-cutoff SAFE_STOP application in POLICY bind window'
+        # The selected receipt was admitted with 90 ms left; the exact applied
+        # status is observed at 70 ms, inside the unchanged required window.
+        clock.update(ros_ns=4_430_000_000,steady_ns=600)
+        return predicate()
+
+    worker.until=until
+    result=asyncio.run(worker.align_policy_step_launch_window(
+        deadline_ns=2_000_000_000,zero_witness={'receipt':old,'state':state,
+            'received_ns':450},launch_window_ns=(70_000_000,90_000_000),
+        receipt_window_ns=(80_000_000,99_000_000)))
+    assert result['receipt'] is selected
+    assert result['state'] is state
+    assert result['received_ns']==600
+    assert waits==[
+        'post-cutoff native SAFE_STOP ingress with POLICY bind window',
+        'exact post-cutoff SAFE_STOP application in POLICY bind window']
+    assert events[-1][0]=='POLICY_STEP_BIND_WINDOW_ZERO_APPLIED'
+    assert events[-1][1]['remaining_to_cutoff_ns']==70_000_000
+    assert events[-2][1]['remaining_to_cutoff_ns']==90_000_000
+    assert events[-2][1]['receipt_selection_window_ns']==[80_000_000,99_000_000]
+    assert events[-2][1]['application_bind_window_ns']==[70_000_000,90_000_000]
+
+
 def test_policy_bind_realigns_after_exact_zero_application_is_observed_late(
         tmp_path):
     from mecanum_nav_rl.core.issued_command_cutoff import (
@@ -7055,7 +7135,7 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
         events.append('fresh_applied_zero')
         return {'zero_receipt_age_ns': 0}
     async def align_policy_window(*, deadline_ns, zero_witness,
-            launch_window_ns=(40_000_000, 60_000_000)):
+            launch_window_ns=(40_000_000, 60_000_000), receipt_window_ns=None):
         events.append(('scan_alignment', launch_window_ns))
         assert zero_witness == {'zero_receipt_age_ns': 0}
         return zero_witness
@@ -7093,9 +7173,10 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
     class AlignmentReached(Exception):
         pass
     async def observe_alignment(*, deadline_ns, zero_witness,
-            launch_window_ns=(70_000_000, 90_000_000)):
+            launch_window_ns=(70_000_000, 90_000_000), receipt_window_ns=None):
         events.append('scan_alignment')
         assert launch_window_ns == (70_000_000, 90_000_000)
+        assert receipt_window_ns == (80_000_000, 99_000_000)
         raise AlignmentReached
     value.align_policy_step_launch_window = observe_alignment
     with pytest.raises(AlignmentReached):
@@ -7173,7 +7254,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value.policy_source_id = 33
     history = []
     prebind_refresh_times = []
-    async def aligned_window(*, deadline_ns, zero_witness, launch_window_ns):
+    async def aligned_window(*, deadline_ns, zero_witness, launch_window_ns,
+            receipt_window_ns=None):
         history.append(('scan_alignment', deadline_ns))
         assert launch_window_ns == (70_000_000, 90_000_000)
         if timing == 'near_scan_cutoff':
