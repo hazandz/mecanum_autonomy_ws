@@ -2800,7 +2800,7 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt,
     if len(rejected) != 1 or int(rejected[0]['fields']['steady_ns']) < release_ns:
         raise RuntimeError(f'{case} lacks exact native fail-closed disposition after release')
     rejection_reason = rejected[0]['fields']['reason']
-    if rejection_reason == 'policy_admission_revoked':
+    if rejection_reason in ('policy_admission_revoked', 'policy_issuance_binding_mismatch'):
         state = rejected[0].get('_verified_backend_state', io.ingress.backend_state)
         from mecanum_nav_rl_interfaces.msg import SimulationContactState
         expected_faults = (SimulationContactState.FAULT_COMMAND_SEQUENCE,
@@ -2975,7 +2975,7 @@ def r02_held_policy_receipt_from_ledger(io, *, held_row, step_index, transition_
 
 
 def r02d_held_receipt_rejection_rows(rows, *, receipt, step_index):
-    """Select the exact fail-closed disposition for R02d's held receipt."""
+    """Select an exact fail-closed gate result for R02d's held receipt."""
     return [row for row in rows
         if row.get('kind') == 'B23_RECEIPT_GATE_RESULT'
         and ((row.get('fields', {}).get('disposition') == '5'
@@ -2983,7 +2983,8 @@ def r02d_held_receipt_rejection_rows(rows, *, receipt, step_index):
               and int(row.get('fields', {}).get('watermark', '0'))
                   >= receipt.final_publish_sequence)
              or (row.get('fields', {}).get('disposition') == '6'
-                 and row.get('fields', {}).get('reason') == 'policy_admission_revoked'))
+                 and row.get('fields', {}).get('reason') in (
+                     'policy_admission_revoked', 'policy_issuance_binding_mismatch')))
         and row.get('fields', {}).get('key') == str(receipt.final_publish_sequence)
         and row.get('fields', {}).get('source') == '1'
         and row.get('fields', {}).get('source_sequence') == str(step_index)]
@@ -2991,7 +2992,7 @@ def r02d_held_receipt_rejection_rows(rows, *, receipt, step_index):
 
 async def await_r02_late_receipt_close(io, *, release_predicate, receipt, step_index,
         deadline_ns):
-    """Wait for an exact old-sequence or revoked-admission disposition."""
+    """Wait for an exact fail-closed disposition for the held POLICY receipt."""
     from mecanum_nav_rl_interfaces.msg import SimulationContactState
     allowed_faults = (0, SimulationContactState.FAULT_COMMAND_SEQUENCE,
         SimulationContactState.FAULT_COMMAND_STALE,
@@ -3007,7 +3008,8 @@ async def await_r02_late_receipt_close(io, *, release_predicate, receipt, step_i
         expected_native_fault_flags=allowed_faults)
     if len(rejection) != 1:
         raise RuntimeError('R02d expected one exact native held-receipt disposition')
-    if rejection[0]['fields']['reason'] == 'policy_admission_revoked':
+    if rejection[0]['fields']['reason'] in (
+            'policy_admission_revoked', 'policy_issuance_binding_mismatch'):
         state = await io.until(lambda: io.ingress.backend_state
             if io.ingress.backend_state is not None
             and io.ingress.backend_state.fault_flags in (
@@ -7172,7 +7174,8 @@ class TrainingWorkerIO:
                 release_predicate=released_row, receipt=policy_receipt,
                 step_index=token.step_index, deadline_ns=deadline)
             rejection_reason = rejection_rows[0]['fields']['reason']
-            if rejection_reason == 'policy_admission_revoked':
+            if rejection_reason in (
+                    'policy_admission_revoked', 'policy_issuance_binding_mismatch'):
                 checked = verify_r02_late_receipt_rejected(self, case='R02d',
                     step_index=token.step_index, receipt=policy_receipt,
                     rejection_rows=rejection_rows)

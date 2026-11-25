@@ -9253,6 +9253,45 @@ def test_r02d_inhibited_admission_rejects_exact_held_policy_with_native_zero_ove
             receipt=receipt,rejection_rows=[{**rows[2], '_verified_backend_state':wrong}])
 
 
+def test_r02d_closed_admission_binding_mismatch_is_exact_fail_closed_result(tmp_path):
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        r02d_held_receipt_rejection_rows, verify_r02_late_receipt_rejected)
+    native=tmp_path/'native-events.jsonl'
+    rows=[
+        {'kind':'B23_POLICY_RECEIPT_HELD','fields':{
+            'sequence':'48','source_sequence':'1','receive_ns':'100',
+            'publisher':'81'}},
+        {'kind':'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE','fields':{
+            'sequence':'48','source_sequence':'1','reason':'admission_inhibited',
+            'receive_ns':'200'}},
+        {'kind':'B23_RECEIPT_GATE_RESULT','fields':{
+            'disposition':'6','reason':'policy_issuance_binding_mismatch','key':'48',
+            'source':'1','source_sequence':'1','watermark':'47','steady_ns':'300'}},]
+    native.write_text('\n'.join(json.dumps(row) for row in rows)+'\n')
+    receipt=NS(final_publish_sequence=48,final_publisher_instance_id=81)
+    state=NS(fault_flags=SimulationContactState.FAULT_COMMAND_SEQUENCE,
+        local_zero_override=True,actuator_inhibited=True,applied_receipt_valid=False)
+    io=NS(descriptor={'native_events_path':str(native)},
+        ingress=NS(backend_state=state,policy_application_for_receipt=lambda _r:None),events=[])
+    rejection=r02d_held_receipt_rejection_rows(rows,receipt=receipt,step_index=1)
+    assert len(rejection)==1
+    checked=verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,
+        receipt=receipt,rejection_rows=rejection)
+    assert checked['native_rejection']=='policy_issuance_binding_mismatch'
+    assert checked['local_zero_override'] is True
+    assert checked['actuator_inhibited'] is True
+    assert checked['policy_backend_applied'] is False
+    assert checked['b1_transition_committed'] is False
+
+    wrong=NS(fault_flags=SimulationContactState.FAULT_COMMAND_SEQUENCE,
+        local_zero_override=False,actuator_inhibited=True,applied_receipt_valid=False)
+    io.ingress.backend_state=wrong
+    with pytest.raises(RuntimeError,match='native zero override'):
+        verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,
+            receipt=receipt,rejection_rows=rejection)
+
+
 def test_r02c_safe_stop_close_requires_exact_inhibited_zero_and_canceled_policy(tmp_path):
     native=tmp_path/'native-events.jsonl'
     native.write_text('\n'.join(json.dumps(row) for row in (
