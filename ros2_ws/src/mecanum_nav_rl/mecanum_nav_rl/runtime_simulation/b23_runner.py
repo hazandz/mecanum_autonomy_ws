@@ -3751,6 +3751,7 @@ def instrument_executor_waits(executor, *, now_ns=time.monotonic_ns,
 # worker loop and the independent Safety executor thread to run.
 WORKER_CALLBACK_BATCH_BUDGET_NS = 2_000_000
 WORKER_CALLBACK_BATCH_MAX = 64
+WORKER_EXECUTOR_WAIT_S = 0.002
 
 
 def spin_receipt_executor_until_stopped(executor, stop_event, *, timeout_s=0.01):
@@ -3822,6 +3823,22 @@ def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
     return count
 
 
+def spin_worker_executor_until_stopped(executor, stop_event, *, timeout_s=WORKER_EXECUTOR_WAIT_S,
+                                       yield_fn=time.sleep):
+    """Keep high-rate worker ingress moving independently of orchestration awaits."""
+    if not callable(getattr(executor, 'spin_once', None)):
+        raise TypeError('worker executor must provide spin_once')
+    if not callable(getattr(stop_event, 'is_set', None)):
+        raise TypeError('worker executor stop event is invalid')
+    if type(timeout_s) not in (int, float) or not math.isfinite(timeout_s) or timeout_s <= 0:
+        raise ValueError('worker executor timeout must be finite and positive')
+    while not stop_event.is_set():
+        executor.spin_once(timeout_sec=float(timeout_s))
+        # Yield the GIL between callbacks so the orchestration, Safety and
+        # receipt executors retain their own deadline checks.
+        yield_fn(0)
+
+
 class TrainingWorkerIO:
     """ROS I/O của một worker sở hữu riêng context, nodes, executor và RPC."""
 
@@ -3876,6 +3893,9 @@ class TrainingWorkerIO:
         self.safety_executor = None
         self.safety_thread = None
         self.safety_executor_error = None
+        self.worker_executor_stop = threading.Event()
+        self.worker_executor_thread = None
+        self.worker_executor_error = None
         self._emit_lock = threading.RLock()
         self.pump_task = None
         self.pump_error = None
@@ -4507,6 +4527,10 @@ class TrainingWorkerIO:
     def start_pump(self):
         if self.pump_task is not None:
             raise RuntimeError('executor pump already started')
+        if self.executor is None:
+            raise RuntimeError('LOCAL_TRAINING worker executor is unavailable')
+        if self.worker_executor_thread is not None:
+            raise RuntimeError('LOCAL_TRAINING worker executor thread already started')
         if self.safety_executor is None:
             raise RuntimeError('LOCAL_TRAINING Safety executor is unavailable')
         if self.safety_thread is not None:
@@ -4517,7 +4541,56 @@ class TrainingWorkerIO:
             daemon=False,
         )
         self.safety_thread.start()
+        self.worker_executor_stop.clear()
+        self.worker_executor_thread = threading.Thread(
+            target=self._spin_worker_executor,
+            name='b23-worker-ingress-executor',
+            daemon=False,
+        )
+        self.worker_executor_thread.start()
         self.pump_task = asyncio.create_task(self._pump(), name='b23-owned-ros-pump')
+
+    def _spin_worker_executor(self):
+        try:
+            spin_worker_executor_until_stopped(self.executor, self.worker_executor_stop)
+            if not self.worker_executor_stop.is_set():
+                raise RuntimeError('LOCAL_TRAINING worker executor stopped unexpectedly')
+        except BaseException as error:
+            self.worker_executor_error = error
+            self.abort_requested = 'WORKER_EXECUTOR_FAILED'
+            try:
+                self.emit('WORKER_EXECUTOR_FAILED', {'error':repr(error), 'steady_ns':self.now()})
+            except BaseException:
+                pass
+
+    def _stop_worker_executor_thread(self, *, deadline_ns=None):
+        thread = getattr(self, 'worker_executor_thread', None)
+        if thread is None:
+            return thread is None
+        stop_event = getattr(self, 'worker_executor_stop', None)
+        if stop_event is None:
+            return False
+        stop_event.set()
+        timeout_s = 1.0 if deadline_ns is None else max(0., (deadline_ns-self.now())/1e9)
+        thread.join(timeout=timeout_s)
+        joined = not thread.is_alive()
+        if joined:
+            self.worker_executor_thread = None
+        return joined
+
+    def _restart_worker_executor_thread(self):
+        if self.worker_executor_error is not None:
+            return False
+        if self.worker_executor_thread is not None:
+            raise RuntimeError('LOCAL_TRAINING worker executor thread is already running')
+        self.worker_executor_stop.clear()
+        self.worker_executor_thread = threading.Thread(
+            target=self._spin_worker_executor,
+            name='b23-worker-ingress-executor-cleanup',
+            daemon=False,
+        )
+        self.worker_executor_thread.start()
+        return True
 
     def _spin_safety_executor(self):
         try:
@@ -4601,29 +4674,10 @@ class TrainingWorkerIO:
                     check_sink()
                 if self.safety_executor_error is not None:
                     raise RuntimeError('LOCAL_TRAINING Safety executor failed') from self.safety_executor_error
+                if self.worker_executor_error is not None:
+                    raise RuntimeError('LOCAL_TRAINING worker executor failed') from self.worker_executor_error
                 if getattr(self, 'receipt_executor_error', None) is not None:
                     raise RuntimeError('LOCAL_TRAINING receipt executor failed') from self.receipt_executor_error
-                spin_started_ns = time.monotonic_ns()
-                spin_thread_started_ns, spin_process_started_ns = time.thread_time_ns(), time.process_time_ns()
-                # Drain only a short, bounded batch. The old one-callback plus
-                # fixed sleep cadence fell behind the reliable backend stream.
-                spin_details = {'wait_calls':0, 'wait_wall_ns':0, 'wait_max_wall_ns':0,
-                    'callback_wall_ns':0, 'callback_max_wall_ns':0,
-                    'last_entity_type':None, 'last_entity_topic':None, 'last_node_name':None}
-                spin_once_count = spin_ready_callback_batch(self.executor, diagnostics=spin_details)
-                spin_ended_ns = time.monotonic_ns()
-                spin_diagnostic = worker_latency_diagnostic(
-                    started_ns=spin_started_ns, completed_ns=spin_ended_ns,
-                    thread_cpu_started_ns=spin_thread_started_ns,
-                    thread_cpu_completed_ns=time.thread_time_ns(),
-                    process_cpu_started_ns=spin_process_started_ns,
-                    process_cpu_completed_ns=time.process_time_ns())
-                if spin_diagnostic is not None:
-                    self.emit('B23_WORKER_SPIN_BATCH_SLOW', {
-                        **spin_diagnostic, **spin_details, 'spin_once_count':spin_once_count,
-                        'observed_ns':self.now(),
-                        'scheduler':worker_scheduler_snapshot(),
-                        'thread_identities':worker_thread_identity_snapshot(capture_python_stacks=True)})
                 self._deliver_future_receipts_after_clock()
                 self._deliver_r04d_ingress_lifecycle_if_due()
                 pause_started_ns = time.monotonic_ns()
@@ -5752,9 +5806,16 @@ class TrainingWorkerIO:
         self.ingress.inhibit()
         self.ingress.pause_admission_publication()
         self.safety.local_training.set_stream_enabled(False)
-        for subscription in self.subscriptions:
-            self.node.destroy_subscription(subscription)
-        self.subscriptions.clear()
+        worker_executor_joined = self._stop_worker_executor_thread(deadline_ns=deadline_ns)
+        if not worker_executor_joined:
+            errors.append('worker_executor_thread_not_joined_before_ingress_close')
+        else:
+            for subscription in self.subscriptions:
+                self.node.destroy_subscription(subscription)
+            self.subscriptions.clear()
+            if (getattr(self, 'executor', None) is not None
+                    and not self._restart_worker_executor_thread()):
+                errors.append('worker_executor_unavailable_for_cleanup_rpc')
         if self.pump_task is not None and self.pump_task.done():
             try:
                 self.pump_task.result()
@@ -5783,6 +5844,8 @@ class TrainingWorkerIO:
                 pass
             except BaseException as error:
                 errors.append('pump_join:' + repr(error))
+        if not self._stop_worker_executor_thread(deadline_ns=deadline_ns):
+            errors.append('worker_executor_thread_not_joined')
         errors.extend(self.close_context())
         if self.now() > deadline_ns:
             errors.append('worker_cleanup_deadline_exceeded')
@@ -5805,6 +5868,9 @@ class TrainingWorkerIO:
     def close_context(self):
         errors = []
         self.stop_requested = True
+        worker_executor_stop = getattr(self, 'worker_executor_stop', None)
+        if worker_executor_stop is not None:
+            worker_executor_stop.set()
         receipt_executor_stop = getattr(self, 'receipt_executor_stop', None)
         if receipt_executor_stop is not None:
             receipt_executor_stop.set()
@@ -5830,6 +5896,13 @@ class TrainingWorkerIO:
             self.safety_thread.join(timeout=1.0)
             if self.safety_thread.is_alive():
                 errors.append('safety_executor_thread_not_joined')
+        worker_executor_thread = getattr(self, 'worker_executor_thread', None)
+        if worker_executor_thread is not None:
+            worker_executor_thread.join(timeout=1.0)
+            if worker_executor_thread.is_alive():
+                errors.append('worker_executor_thread_not_joined')
+            else:
+                self.worker_executor_thread = None
         if self.executor is not None:
             try:
                 if not self.executor.shutdown(timeout_sec=0.):
@@ -5841,6 +5914,7 @@ class TrainingWorkerIO:
             errors.append(repr(error))
         owned_threads_joined = (
             (self.safety_thread is None or not self.safety_thread.is_alive())
+            and (worker_executor_thread is None or not worker_executor_thread.is_alive())
             and (receipt_executor_thread is None or not receipt_executor_thread.is_alive()))
         if owned_threads_joined:
             for node in reversed(self.nodes):

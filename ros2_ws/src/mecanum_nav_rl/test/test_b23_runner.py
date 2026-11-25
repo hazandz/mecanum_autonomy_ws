@@ -48,7 +48,8 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     safety_executor_cycle_diagnostic,
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
     worker_async_task_snapshot, spin_ready_callback_batch,
-    spin_receipt_executor_until_stopped, instrument_executor_waits,
+    spin_worker_executor_until_stopped, spin_receipt_executor_until_stopped,
+    instrument_executor_waits,
     r08_final_callback_diagnostic,
 )
 
@@ -610,21 +611,12 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
             pass
 
     class MainExecutor:
-        def wait_for_ready_callbacks(self, timeout_sec):
-            from rclpy.executors import TimeoutException
-            assert timeout_sec == 0.
-            if observed.get('main_thread') is not None:
-                raise TimeoutException()
-            def run_ready_callback():
-                observed['main_thread'] = threading.current_thread().name
-                observed['main_timeout'] = timeout_sec
-                assert safety_started.wait(0.5), 'Safety executor did not start independently'
-                worker.stop_requested = True
-            class Handler:
-                def __call__(self): run_ready_callback()
-                def exception(self): return None
-                def result(self): return None
-            return Handler(), None, None
+        def spin_once(self, *, timeout_sec):
+            observed['main_thread'] = threading.current_thread().name
+            observed['main_timeout'] = timeout_sec
+            assert safety_started.wait(0.5), 'Safety executor did not start independently'
+            worker.stop_requested = True
+            worker.worker_executor_stop.set()
 
         def shutdown(self, timeout_sec):
             observed['main_shutdown_timeout'] = timeout_sec
@@ -644,6 +636,9 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     worker.safety_executor = SafetyExecutor()
     worker.executor = MainExecutor()
     worker.safety_thread = None
+    worker.worker_executor_stop = threading.Event()
+    worker.worker_executor_thread = None
+    worker.worker_executor_error = None
     worker.pump_task = None
     worker.pump_error = None
     worker.safety_executor_error = None
@@ -666,12 +661,14 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
     errors = worker.close_context()
     assert errors == [], errors
     assert observed['safety_thread'] == 'b23-safety-steady-executor'
+    assert observed['main_thread'] == 'b23-worker-ingress-executor'
     assert observed['main_thread'] != observed['safety_thread']
-    assert observed['main_timeout'] == 0.0
+    assert observed['main_timeout'] == runner_module.WORKER_EXECUTOR_WAIT_S
     assert observed['safety_timeout'] is None
     assert observed['safety_shutdown_timeout'] == 1.0
     assert observed['context_shutdown'] is True
     assert worker.safety_thread is not None and not worker.safety_thread.is_alive()
+    assert worker.worker_executor_thread is None
 
 
 def test_local_training_safety_executor_uses_four_workers_for_isolated_timer_group(monkeypatch):
@@ -6284,30 +6281,44 @@ def worker():
     return value, clock
 
 
-def test_worker_pump_dispatches_bounded_ready_batch_before_yielding():
+def test_worker_orchestration_pump_does_not_own_ros_executor_spin():
     value, _clock = worker()
-    calls = []
-    from rclpy.executors import TimeoutException
-    class Handler:
-        def __call__(self): calls.append('callback')
-        def exception(self): return None
-        def result(self): return None
-    ready = [Handler()]
-    def wait_for_ready_callbacks(*, timeout_sec):
-        assert timeout_sec == 0.
-        if ready: return ready.pop(0), None, None
-        raise TimeoutException()
-    value.executor = NS(wait_for_ready_callbacks=wait_for_ready_callbacks)
+    value.executor = NS(wait_for_ready_callbacks=lambda **_kwargs: pytest.fail(
+        'orchestration loop must not spin the worker ROS executor'))
     value.safety_executor_error = None
+    value.worker_executor_error = None
     value._event_sink_owner = None
     value._pending_future_receipts = []
     value._deliver_future_receipts_after_clock = lambda: None
     value._deliver_r04d_ingress_lifecycle_if_due = lambda: None
     value.pause = lambda _seconds: stop_after_one_turn(value)
     asyncio.run(value._pump())
-    assert calls == ['callback']
     assert value.stop_requested is True
     assert value.pump_error is None
+
+
+def test_worker_executor_spin_runs_until_owned_stop_and_propagates_failure():
+    stop = threading.Event()
+    calls, yields = [], []
+
+    class FakeExecutor:
+        def spin_once(self, *, timeout_sec):
+            calls.append(timeout_sec)
+            if len(calls) == 3:
+                stop.set()
+
+    spin_worker_executor_until_stopped(FakeExecutor(), stop,
+        timeout_s=0.002, yield_fn=lambda duration: yields.append(duration))
+    assert calls == [0.002, 0.002, 0.002]
+    assert yields == [0, 0, 0]
+
+    class FailedExecutor:
+        def spin_once(self, *, timeout_sec):
+            raise RuntimeError('worker executor fake failure')
+
+    with pytest.raises(RuntimeError, match='worker executor fake failure'):
+        spin_worker_executor_until_stopped(FailedExecutor(), threading.Event(),
+            yield_fn=lambda _duration: None)
 
 
 def test_ready_callback_batch_drains_until_empty_or_monotonic_budget():
