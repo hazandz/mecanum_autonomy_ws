@@ -7395,16 +7395,15 @@ class TrainingWorkerIO:
                 else:
                     zero_witness = await self.align_policy_step_launch_window(
                         deadline_ns=deadline, zero_witness=zero_witness,
-                        # R08 evidence showed 125.3 ms from the last applied
-                        # SAFE_STOP publication to the next POLICY receipt:
-                        # bind ACK, a post-ACK noisy sample, then the first
-                        # Safety tick consumed the 70-90 ms phase and deferred
-                        # at the next scan cutoff. Select both the fresh zero
-                        # and bind at the beginning of one scan period, leaving
-                        # at least 90 ms for that unchanged transaction path.
-                        # No watchdog, freshness, or cutoff threshold changes.
-                        launch_window_ns=(90_000_000, 99_000_000),
-                        receipt_window_ns=(90_000_000, 99_000_000))
+                        # R01a observed real post-reset Safety ticks at 80, 60,
+                        # 30 and 0 ms before cutoff. A 90-99 ms-only selection
+                        # window contains no eligible tick on that cadence and
+                        # times out before BIND_PENDING_STEP. Select an actual
+                        # 80-99 ms receipt and require exact application while
+                        # 70-90 ms remain. This changes scheduling only; the
+                        # scan cutoff, freshness and 100 ms watchdog stay fixed.
+                        launch_window_ns=(70_000_000, 90_000_000),
+                        receipt_window_ns=(80_000_000, 99_000_000))
                 # The scan-window witness may already be several Safety ticks
                 # old by the time the ACK and first post-ACK sample arrive.
                 # R08 showed that a witness fresh at bind could age past the
