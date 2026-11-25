@@ -2879,7 +2879,8 @@ def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
 
 async def drain_final_publication_before_close(
         io, adapter, *, deadline_ns,
-        event_name='FINAL_OUTPUT_DRAINED_BEFORE_CLOSE'):
+        event_name='FINAL_OUTPUT_DRAINED_BEFORE_CLOSE',
+        maintain_output_until_applied=False):
     """Quiesce Safety and join its last output before publishing a close zero.
 
     A POLICY output already selected by the steady Safety timer can still be
@@ -2890,7 +2891,8 @@ async def drain_final_publication_before_close(
     """
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     from mecanum_nav_rl.runtime_simulation.local_training_ingress import stamp_ns
-    adapter.set_stream_enabled(False)
+    if not maintain_output_until_applied:
+        adapter.set_stream_enabled(False)
     # A source sequence can have more than one final publication (for example,
     # periodic Safety ticks can republish the still-current POLICY candidate).
     # A timer callback already in flight when the stream is disabled can also
@@ -2920,68 +2922,81 @@ async def drain_final_publication_before_close(
             getattr(linear, 'x', None), getattr(linear, 'y', None), getattr(linear, 'z', None),
             getattr(angular, 'x', None), getattr(angular, 'y', None), getattr(angular, 'z', None))
 
-    output = None
-    while True:
-        remaining_ns = deadline_ns - io.now()
-        if remaining_ns <= 0:
-            raise TimeoutError('last Safety output acknowledgement deadline expired')
-        acknowledged = await asyncio.to_thread(
-            wait_for_all_acked, Duration(nanoseconds=remaining_ns))
-        if acknowledged is not True:
-            raise TimeoutError('last Safety output was not acknowledged before close')
-        first_snapshot = copy.deepcopy(adapter.last_output)
-        if first_snapshot is None or first_snapshot.source not in (
-                CommandEnvelope.SOURCE_POLICY, CommandEnvelope.SOURCE_SAFE_STOP):
-            raise RuntimeError('cannot bind the last Safety output before close')
-        remaining_ns = deadline_ns - io.now()
-        if remaining_ns <= 0:
-            raise TimeoutError('last Safety output acknowledgement deadline expired')
-        acknowledged = await asyncio.to_thread(
-            wait_for_all_acked, Duration(nanoseconds=remaining_ns))
-        if acknowledged is not True:
-            raise TimeoutError('last Safety output was not acknowledged before close')
-        output = copy.deepcopy(adapter.last_output)
-        if output_identity(first_snapshot) == output_identity(output):
-            break
-    io.emit('SAFETY_OUTPUT_WRITER_ACKED', {
-        'source': output.source, 'source_instance_id': output.source_instance_id,
-        'source_sequence': output.sequence,
-        'stamp_ns': stamp_ns(output.header.stamp), 'steady_ns': io.now()})
     latest_receipt = getattr(io.final, 'latest_publication_for_output', None)
     if not callable(latest_receipt):
         # Test doubles and older isolated callers still exercise the exact
         # path; the production FinalPublicationView always provides the
         # latest-key lookup used for this close barrier.
         latest_receipt = io.final.publication_for_output
-    receipt = await io.until(lambda: latest_receipt(output),
-        deadline_ns=deadline_ns, phase='latest last Safety-key receipt before close')
-    # A reliable writer ACK confirms transport to the reader, not completion
-    # of its callback. Yield the worker/event loop briefly so its bounded
-    # callback pump can observe queued receipts, then rejoin the newest
-    # same-key publication. Keep repeating within the original step deadline
-    # until that newest receipt has a native application and no later receipt
-    # appeared during the handoff. This prevents SAFE_STOP from overtaking a
-    # duplicate POLICY publication already in flight when the stream stopped.
     while True:
-        if receipt.source == CommandEnvelope.SOURCE_SAFE_STOP:
-            application = await await_r02g_exact_safe_stop_application(
-                io, receipt=receipt, deadline_ns=deadline_ns,
-                route='last-output-before-close')
-        else:
-            application = await io.until(
-                lambda: io.ingress.policy_application_for_receipt(receipt),
-                deadline_ns=deadline_ns, phase='latest POLICY application before close')
-        remaining_ns = deadline_ns - io.now()
-        if remaining_ns <= 0:
-            raise TimeoutError('latest Safety-key receipt did not quiesce before close')
-        await asyncio.sleep(min(0.01, remaining_ns / 1_000_000_000))
-        newest = latest_receipt(output)
-        if newest is None:
-            raise RuntimeError('latest Safety-key receipt disappeared before close')
-        if newest.final_publish_sequence < receipt.final_publish_sequence:
-            raise RuntimeError('Safety-key receipt publication sequence regressed before close')
-        if newest.final_publish_sequence == receipt.final_publish_sequence:
-            break
+        output = None
+        while True:
+            remaining_ns = deadline_ns - io.now()
+            if remaining_ns <= 0:
+                raise TimeoutError('last Safety output acknowledgement deadline expired')
+            acknowledged = await asyncio.to_thread(
+                wait_for_all_acked, Duration(nanoseconds=remaining_ns))
+            if acknowledged is not True:
+                raise TimeoutError('last Safety output was not acknowledged before close')
+            first_snapshot = copy.deepcopy(adapter.last_output)
+            if first_snapshot is None or first_snapshot.source not in (
+                    CommandEnvelope.SOURCE_POLICY, CommandEnvelope.SOURCE_SAFE_STOP):
+                raise RuntimeError('cannot bind the last Safety output before close')
+            remaining_ns = deadline_ns - io.now()
+            if remaining_ns <= 0:
+                raise TimeoutError('last Safety output acknowledgement deadline expired')
+            acknowledged = await asyncio.to_thread(
+                wait_for_all_acked, Duration(nanoseconds=remaining_ns))
+            if acknowledged is not True:
+                raise TimeoutError('last Safety output was not acknowledged before close')
+            output = copy.deepcopy(adapter.last_output)
+            if output_identity(first_snapshot) == output_identity(output):
+                break
+        io.emit('SAFETY_OUTPUT_WRITER_ACKED', {
+            'source': output.source, 'source_instance_id': output.source_instance_id,
+            'source_sequence': output.sequence,
+            'stamp_ns': stamp_ns(output.header.stamp), 'steady_ns': io.now()})
+        receipt = await io.until(lambda: latest_receipt(output),
+            deadline_ns=deadline_ns, phase='latest last Safety-key receipt before close')
+        # A reliable writer ACK confirms transport to the reader, not completion
+        # of its callback. Yield the worker/event loop briefly so its bounded
+        # callback pump can observe queued receipts, then rejoin the newest
+        # same-key publication. Keep repeating within the original step deadline
+        # until that newest receipt has a native application and no later receipt
+        # appeared during the handoff. When requested, keep the current POLICY
+        # command publishing during this wait; the caller holds its command
+        # sequence and does not issue a new POLICY step.
+        while True:
+            if receipt.source == CommandEnvelope.SOURCE_SAFE_STOP:
+                application = await await_r02g_exact_safe_stop_application(
+                    io, receipt=receipt, deadline_ns=deadline_ns,
+                    route='last-output-before-close')
+            else:
+                application = await io.until(
+                    lambda: io.ingress.policy_application_for_receipt(receipt),
+                    deadline_ns=deadline_ns, phase='latest POLICY application before close')
+            remaining_ns = deadline_ns - io.now()
+            if remaining_ns <= 0:
+                raise TimeoutError('latest Safety-key receipt did not quiesce before close')
+            await asyncio.sleep(min(0.01, remaining_ns / 1_000_000_000))
+            newest = latest_receipt(output)
+            if newest is None:
+                raise RuntimeError('latest Safety-key receipt disappeared before close')
+            if newest.final_publish_sequence < receipt.final_publish_sequence:
+                raise RuntimeError('Safety-key receipt publication sequence regressed before close')
+            if newest.final_publish_sequence == receipt.final_publish_sequence:
+                break
+            receipt = newest
+        if maintain_output_until_applied:
+            # Stop only after the latest selected output has an exact native
+            # application. If a timer tick won the handoff, re-open the stream
+            # and join that newer output before allowing SAFE_STOP to follow.
+            adapter.set_stream_enabled(False)
+            frozen_output = copy.deepcopy(adapter.last_output)
+            if output_identity(frozen_output) != output_identity(output):
+                adapter.set_stream_enabled(True)
+                continue
+        break
         receipt = newest
     if not isinstance(application, dict) or application.get('state') is None:
         raise RuntimeError('last Safety output lacks exact native application evidence')
@@ -2994,6 +3009,8 @@ async def drain_final_publication_before_close(
     io.emit(event_name, {
         'source': receipt.source, 'source_sequence': receipt.sequence,
         'final_publish_sequence': receipt.final_publish_sequence,
+        'output_stream_maintained_until_application': maintain_output_until_applied,
+        'frozen_output_identity_matched_application': True,
         'receipt_publish_stamp_ns': (stamp_ns(receipt.header.stamp)
             if getattr(receipt, 'header', None) is not None else None),
         'application_received_ns': application.get('received_ns'),
@@ -6812,9 +6829,18 @@ class TrainingWorkerIO:
                 and not any((linear.x, linear.y, linear.z,
                     angular.x, angular.y, angular.z)))
         if last_output is not None and not already_zero_safe_stop:
+            maintain_policy_output = last_output.source == CommandEnvelope.SOURCE_POLICY
+            if maintain_policy_output:
+                # Hold this committed slot's existing candidate while its
+                # latest final receipt reaches native. No new POLICY issuance
+                # can occur before freeze_step_streams returns.
+                adapter.set_policy_hold(False)
             await drain_final_publication_before_close(
                 self, adapter, deadline_ns=deadline_ns,
-                event_name='STEP_PRE_CLOSE_OUTPUT_DRAINED')
+                event_name='STEP_PRE_CLOSE_OUTPUT_DRAINED',
+                maintain_output_until_applied=maintain_policy_output)
+            if maintain_policy_output:
+                adapter.set_policy_hold(True)
         elif already_zero_safe_stop:
             # There is no open POLICY receipt to protect from a closing
             # SAFE_STOP. Keep the already-zero SAFE_STOP stream running while

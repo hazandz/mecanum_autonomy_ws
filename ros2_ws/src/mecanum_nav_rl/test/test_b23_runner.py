@@ -7462,11 +7462,13 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
         applied_final_publisher_instance_id=55, local_zero_override=False,
         applied_receipt_valid=True, paused=False, applied_physics_iteration=304,
         applied_sim_stamp=NS(sec=3,nanosec=40_000_000))
-    adapter = NS(safe_stop_sequence=7, last_output=NS(source=source, source_instance_id=44, sequence=7,
+    adapter = NS(safe_stop_sequence=7, stream_enabled=True,
+        last_output=NS(source=source, source_instance_id=44, sequence=7,
         header=NS(stamp=NS(sec=3,nanosec=40_000_000)),
         twist=NS(linear=NS(x=0., y=0., z=0.), angular=NS(x=0., y=0., z=0.))),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
-        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)),
+        set_stream_enabled=lambda enabled: (calls.append(('stream', enabled)),
+            setattr(adapter, 'stream_enabled', enabled)),
         tick=lambda: calls.append(('immediate_safety_tick',)),
         node=NS(_accepted_pub=NS(wait_for_all_acked=lambda timeout: (
             calls.append(('writer_ack', timeout.nanoseconds)) or True))))
@@ -7508,9 +7510,17 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     value.ingress.application_for_receipt = lambda receipt: (
         {'state':state, 'received_ns':clock.ns}
         if receipt.final_publish_sequence in (20, 21) else None)
-    value.ingress.policy_application_for_receipt = lambda receipt: (
-        {'state':state, 'received_ns':clock.ns}
-        if receipt.final_publish_sequence == 20 else None)
+    policy_application_ready_ns = [None]
+    def policy_application_for_receipt(receipt):
+        if last_source == 'policy':
+            assert adapter.stream_enabled, 'keep the current command output alive until exact native application'
+            if policy_application_ready_ns[0] is None:
+                policy_application_ready_ns[0] = clock.ns + 120_000_000
+            if clock.ns < policy_application_ready_ns[0]:
+                return None
+        return ({'state':state, 'received_ns':clock.ns}
+            if receipt.final_publish_sequence == 20 else None)
+    value.ingress.policy_application_for_receipt = policy_application_for_receipt
     value.ingress.receipt_for_publication_sequence = lambda sequence: NS(
         source=__import__('mecanum_nav_rl.core.issued_command_cutoff',
             fromlist=['ReceiptSource']).ReceiptSource.SAFE_STOP,
@@ -7518,6 +7528,9 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     value.last_safe_stop_publish_sequence = 20
     async def pause(seconds):
         await clock.pause(seconds)
+        if (last_source == 'policy'
+                and ('immediate_safety_tick',) not in calls):
+            return
         if value.ingress.last_published_sample_sequence == 9:
             value.ingress.last_published_sample_sequence = 10
             watermark[0] = 10
@@ -7534,7 +7547,8 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
         value.ingress.backend_state.paused = False
     value.pause = pause
     value.emit = lambda name, record: (calls.append((name, record)), events.append((name, record)))
-    asyncio.run(value.freeze_step_streams(deadline_ns=clock.ns+20_000_000))
+    value.deadline_ns = clock.ns + 1_000_000_000
+    asyncio.run(value.freeze_step_streams(deadline_ns=clock.ns+1_000_000_000))
     assert ('hold', True) in calls
     assert ('stream', True) in calls
     assert ('inhibit', False) in calls
@@ -7568,12 +7582,15 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
     if last_source == 'policy':
         assert calls.index(('stream', False)) < calls.index(('stream', True))
-        assert calls.index(('writer_ack', 20_000_000)) < calls.index(('inhibit', False))
+        first_writer_ack = next(i for i, call in enumerate(calls) if call[0] == 'writer_ack')
+        assert first_writer_ack < calls.index(('inhibit', False))
     else:
         assert calls.index(('stream', True)) < calls.index(('immediate_safety_tick',))
         assert not any(call[0] == 'writer_ack' for call in calls)
     if last_source == 'policy':
-        assert calls.index(('resume_current_admission',)) < calls.index(('writer_ack', 20_000_000))
+        assert calls.index(('resume_current_admission',)) < first_writer_ack
+        assert policy_application_ready_ns[0] is not None
+        assert clock.ns >= policy_application_ready_ns[0]
     else:
         assert ('resume_current_admission',) not in calls
     event_names = [name for name, _ in events]
