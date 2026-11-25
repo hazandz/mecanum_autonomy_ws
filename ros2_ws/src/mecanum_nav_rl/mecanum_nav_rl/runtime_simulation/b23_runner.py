@@ -5350,17 +5350,23 @@ class TrainingWorkerIO:
             return cutoff_ns
         raise TimeoutError('R09b could not align an applied receipt around a B1 cutoff')
 
-    async def lifecycle_event(self, *, rearm, deadline_ns):
+    async def lifecycle_event(self, *, rearm, deadline_ns,
+            expected_native_fault_flags=None):
         old = self.ingress.lifecycle
         previous = old.sequence if old is not None else 0
         client = self.rearm_client if rearm else self.reset_client
         budget = min(1., (deadline_ns - self.now()) / 1e9)
         if budget <= 0:
             raise TimeoutError('lifecycle event has no remaining budget')
-        await self.call(client, self.trigger_type.Request(), timeout_s=budget,
-                        phase='lifecycle_rearm' if rearm else 'lifecycle_reset')
+        call_args = {'timeout_s':budget,
+            'phase':'lifecycle_rearm' if rearm else 'lifecycle_reset'}
+        if expected_native_fault_flags is not None:
+            call_args['expected_native_fault_flags'] = expected_native_fault_flags
+        await self.call(client, self.trigger_type.Request(), **call_args)
         state = await self.until(lambda: self.ingress.lifecycle if self.ingress.lifecycle is not None
-            and self.ingress.lifecycle.sequence > previous else None, deadline_ns=deadline_ns, phase='lifecycle source event')
+            and self.ingress.lifecycle.sequence > previous else None,
+            deadline_ns=deadline_ns, phase='lifecycle source event',
+            expected_native_fault_flags=expected_native_fault_flags)
         if state.barrier_state != (state.BARRIER_READY if rearm else state.BARRIER_NON_READY):
             raise RuntimeError('actual lifecycle event did not reach requested barrier')
         return copy.deepcopy(state)
@@ -9530,8 +9536,10 @@ async def training_child(path):
                     'marker_sha256':marker_sha256,
                     'marker_write_duration_ns':marker_write_completed_ns-marker_write_started_ns,
                     'final_lifecycle_baseline_sequence':int(baseline_lifecycle.sequence)})
+                from mecanum_nav_rl_interfaces.msg import SimulationContactState
                 fault_lifecycle = await io.lifecycle_event(rearm=False,
-                    deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000))
+                    deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000),
+                    expected_native_fault_flags=(SimulationContactState.FAULT_COMMAND_STALE,))
                 await io.until(lambda: state if state['scheduled'] >= 1 and state['delivered'] >= 1 else None,
                     deadline_ns=min(io.deadline_ns, io.now() + 2_000_000_000),
                     phase='R04d delayed lifecycle callback completion',
@@ -9636,7 +9644,6 @@ async def training_child(path):
                     expected_native_fault_flags=r04d_expected_native_fault_flags())
                 if native_status is None:
                     raise RuntimeError('R04d did not observe native zero/inhibit in the pinned backend context')
-                from mecanum_nav_rl_interfaces.msg import SimulationContactState
                 composite_fault = (SimulationContactState.FAULT_COMMAND_SEQUENCE |
                     SimulationContactState.FAULT_COMMAND_STALE)
                 if (native_status['fault_flags'] == composite_fault

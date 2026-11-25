@@ -4730,6 +4730,41 @@ def test_r04d_wait_tolerates_only_bound_lifecycle_and_watchdog_faults_while_zero
             phase='R04d fault without native zero', expected_native_fault_flags=expected))
 
 
+def test_r04d_lifecycle_event_wait_propagates_narrow_stale_fault_allowance():
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+
+    value = object.__new__(TrainingWorkerIO)
+    old = NS(sequence=5)
+    new = NS(sequence=6, barrier_state=2, BARRIER_NON_READY=2)
+    value.ingress = NS(lifecycle=old)
+    value.reset_client = object()
+    value.rearm_client = object()
+    value.trigger_type = NS(Request=lambda: object())
+    value.now = lambda: 100
+    calls = []
+    waits = []
+
+    async def call(client, request, **kwargs):
+        calls.append((client, request, kwargs))
+
+    async def until(predicate, **kwargs):
+        waits.append(kwargs)
+        return new
+
+    value.call = call
+    value.until = until
+    result = asyncio.run(value.lifecycle_event(rearm=False, deadline_ns=2_000_000_000,
+        expected_native_fault_flags=(SimulationContactState.FAULT_COMMAND_STALE,)))
+
+    assert result == new and result is not old
+    assert len(calls) == 1 and calls[0][0] is value.reset_client
+    assert calls[0][2]['expected_native_fault_flags'] == (
+        SimulationContactState.FAULT_COMMAND_STALE,)
+    assert len(waits) == 1 and waits[0]['phase'] == 'lifecycle source event'
+    assert waits[0]['expected_native_fault_flags'] == (
+        SimulationContactState.FAULT_COMMAND_STALE,)
+
+
 def test_r04d_composite_fault_requires_the_exact_released_new_context_zero_receipt():
     from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_lifecycle_mismatch_fault_evidence
 
