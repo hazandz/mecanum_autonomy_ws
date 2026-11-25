@@ -4542,6 +4542,39 @@ def test_r04d_wait_tolerates_only_receipt_watchdog_while_native_zero_is_active()
             phase='R04d fault without native zero', expected_native_fault_flags=expected))
 
 
+def test_r04d_native_watchdog_zero_uses_bound_raw_status_even_if_later_status_changes():
+    import hashlib
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from mecanum_nav_rl.runtime_simulation.b23_runner import r04d_native_watchdog_zero_status
+
+    wire = b'production-status-cdr-fixture'
+    base = {'backend_instance_id':71,'session_id':'session-a','config_hash':'cfg-a',
+        'lifecycle_identity':[2,3,4],
+        'fault_flags':SimulationContactState.FAULT_COMMAND_STALE,
+        'local_zero_override':True,'actuator_inhibited':True,
+        'status_sequence':19,'physics_iteration':85,'source_stamp_ns':1_290_000_000,
+        'received_ns':700,'wire_sha256':hashlib.sha256(wire).hexdigest(),
+        'wire_cdr_hex':wire.hex()}
+    later = {**base,'fault_flags':0,'local_zero_override':False,
+        'actuator_inhibited':False,'status_sequence':20,'received_ns':800,
+        'wire_sha256':hashlib.sha256(b'later').hexdigest(),'wire_cdr_hex':b'later'.hex()}
+    wrong_identity = {**base,'backend_instance_id':72,'received_ns':650}
+
+    selected = r04d_native_watchdog_zero_status(
+        [wrong_identity,base,later], backend_instance_id=71,
+        session_id='session-a',config_hash='cfg-a',lifecycle_identity=[2,3,4],after_ns=600)
+    assert selected is base
+    assert selected['received_ns'] == 700
+
+    assert r04d_native_watchdog_zero_status(
+        [wrong_identity], backend_instance_id=71, session_id='session-a',
+        config_hash='cfg-a', lifecycle_identity=[2,3,4], after_ns=600) is None
+    assert r04d_native_watchdog_zero_status(
+        [{**base,'wire_sha256':'0'*64}], backend_instance_id=71,
+        session_id='session-a', config_hash='cfg-a',
+        lifecycle_identity=[2,3,4], after_ns=600) is None
+
+
 def test_r04d_ingress_binding_switch_follows_final_publisher_switch():
     from mecanum_nav_rl.runtime_simulation.b23_runner import (
         r04d_final_publisher_precedes_ingress, r04d_ingress_lifecycle_delay_s)

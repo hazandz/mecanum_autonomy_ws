@@ -1418,6 +1418,41 @@ def r04d_expected_native_fault_flags():
     return SimulationContactState.FAULT_COMMAND_STALE
 
 
+def r04d_native_watchdog_zero_status(rows, *, backend_instance_id, session_id,
+        config_hash, lifecycle_identity, after_ns):
+    """Select a raw-bound native zero/watchdog sample from the delayed lifecycle phase.
+
+    Later backend statuses may legitimately supersede the transient watchdog
+    sample after a fresh SAFE_STOP.  R04d must assess the status observed while
+    the fault was active, not require that it remain the latest status forever.
+    """
+    expected_fault = r04d_expected_native_fault_flags()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        received_ns = row.get('received_ns')
+        if (type(received_ns) is not int or received_ns <= after_ns
+                or row.get('backend_instance_id') != backend_instance_id
+                or row.get('session_id') != session_id
+                or row.get('config_hash') != config_hash
+                or row.get('lifecycle_identity') != list(lifecycle_identity)
+                or row.get('fault_flags') != expected_fault
+                or row.get('local_zero_override') is not True
+                or row.get('actuator_inhibited') is not True):
+            continue
+        wire_hex, wire_sha = row.get('wire_cdr_hex'), row.get('wire_sha256')
+        try:
+            wire_matches = (isinstance(wire_hex, str) and bool(wire_hex)
+                and isinstance(wire_sha, str)
+                and hashlib.sha256(bytes.fromhex(wire_hex)).hexdigest() == wire_sha)
+        except ValueError:
+            wire_matches = False
+        if not wire_matches:
+            continue
+        return row
+    return None
+
+
 def r04d_final_safe_stop_dispatch(original, marker_path, emit, schedule, *, safe_stop_source):
     """Release a held zero only after this invocation's ingress binds its identity."""
     marker_path = Path(marker_path)
@@ -3443,6 +3478,7 @@ class TrainingWorkerIO:
         self._hold_next_safety_input = False
         self._held_safety_input = None
         self._r04d_fault_state = None
+        self._r04d_backend_statuses = []
         self._r04d_pending_ingress_lifecycle = None
         self._r06b_measurement_fault = {'active':False, 'yielded':False, 'dropped':False}
         self._r06c_hold_after_sequence = None
@@ -3719,6 +3755,30 @@ class TrainingWorkerIO:
             try:
                 if quarantine_r07c_restart_epoch(message, wire, received_ns):
                     return None
+                if (topic == '/mecanum/local_training/backend_state'
+                        and getattr(self, '_r04d_fault_state', None) is not None):
+                    header = message.header
+                    status = {
+                        'backend_instance_id':int(message.backend_instance_id),
+                        'session_id':str(message.session_id),
+                        'config_hash':str(message.config_hash),
+                        'lifecycle_identity':[int(message.episode_generation),
+                            int(message.reset_epoch), int(message.runtime_generation)],
+                        'fault_flags':int(message.fault_flags),
+                        'local_zero_override':bool(message.local_zero_override),
+                        'actuator_inhibited':bool(message.actuator_inhibited),
+                        'status_sequence':int(message.status_sequence),
+                        'physics_iteration':int(message.physics_iteration),
+                        'source_stamp_ns':int(header.stamp.sec)*1_000_000_000
+                            +int(header.stamp.nanosec),
+                        'received_ns':int(received_ns),
+                        'wire_sha256':hashlib.sha256(wire).hexdigest(),
+                        'wire_cdr_hex':wire.hex()}
+                    statuses = getattr(self, '_r04d_backend_statuses', None)
+                    if statuses is None:
+                        statuses = self._r04d_backend_statuses = []
+                    statuses.append(status)
+                    self.emit('R04D_NATIVE_BACKEND_STATUS_OBSERVED', status)
                 rollback_active = (
                     'time_only_rollback_after_contact_proof' in getattr(self, 'fault_hooks', ())
                     and (getattr(self, '_r07b_rollback_pending_before_ns', None) is not None
@@ -9135,19 +9195,22 @@ async def training_child(path):
                     if commit_path.exists() else 0
                 if issued_count != 0 or commit_count != prior_commits:
                     raise RuntimeError('R04d stale lifecycle fault advanced POLICY/B1')
-                native_state = io.ingress.backend_state
-                expected_fault = r04d_expected_native_fault_flags()
-                if (native_state is None or native_state.fault_flags != expected_fault
-                        or not native_state.local_zero_override
-                        or not native_state.actuator_inhibited):
+                native_status = r04d_native_watchdog_zero_status(
+                    io._r04d_backend_statuses,
+                    backend_instance_id=int(io.descriptor['backend_instance_id']),
+                    session_id=io.descriptor['session_id'],
+                    config_hash=io.descriptor['config_hash'],
+                    lifecycle_identity=expected_lifecycle_identity,
+                    after_ns=marker_armed_ns)
+                if native_status is None:
                     raise RuntimeError('R04d watchdog fault did not retain native zero/inhibit')
                 io.emit('R04D_NATIVE_WATCHDOG_ZERO_VERIFIED', {
-                    'fault_flags':int(native_state.fault_flags),
-                    'local_zero_override':bool(native_state.local_zero_override),
-                    'actuator_inhibited':bool(native_state.actuator_inhibited),
-                    'status_sequence':int(native_state.status_sequence),
-                    'physics_iteration':int(native_state.physics_iteration),
-                    'steady_ns':io.now()})
+                    **{key:native_status[key] for key in (
+                        'backend_instance_id','session_id','config_hash','lifecycle_identity',
+                        'fault_flags','local_zero_override','actuator_inhibited',
+                        'status_sequence','physics_iteration','source_stamp_ns','received_ns',
+                        'wire_sha256')},
+                    'assessment_ns':io.now()})
                 outcome = {'case':'R04d','resets_confirmed':1,'policy_steps_committed':0,
                     'stale_input_disposition':rejected['disposition'],
                     'stale_rejection_reason':('LIFECYCLE_STALE_OR_FUTURE'
@@ -9158,9 +9221,9 @@ async def training_child(path):
                     'final_new_context_safe_stop_held':len(held_zero),
                     'final_new_context_safe_stop_released':len(released_zero),
                     'final_new_context_publication_errors':publication_errors,
-                    'native_fault_flags':int(native_state.fault_flags),
-                    'native_local_zero_override':bool(native_state.local_zero_override),
-                    'native_actuator_inhibited':bool(native_state.actuator_inhibited),
+                    'native_fault_flags':int(native_status['fault_flags']),
+                    'native_local_zero_override':bool(native_status['local_zero_override']),
+                    'native_actuator_inhibited':bool(native_status['actuator_inhibited']),
                     'source_stamp_ns':scheduled['source_stamp_ns'],
                     'source_ros_age_ns':rejected['ros_ns']-scheduled['source_stamp_ns'],
                     'no_policy_issued':True,'b1_commits_before_fault':prior_commits,
