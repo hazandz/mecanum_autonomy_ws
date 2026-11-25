@@ -4962,6 +4962,32 @@ class TrainingWorkerIO:
                 allow_pending=True),
             deadline_ns=deadline_ns, phase='R02e native pre-bind rejection and fresh acceptance')
 
+    def resume_r02e_admission_after_acceptance(self, *, acceptance,
+            fresh_sample_sequence, pending_token, step_index, transition_id):
+        """Resume fresh producer admissions after the exact R02e sample was accepted."""
+        from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+
+        if (acceptance.get('postbind_sample_sequence') != fresh_sample_sequence
+                or acceptance.get('postbind_native_accept_count') != 1
+                or acceptance.get('pending_token_nonzero') is not True):
+            raise RuntimeError('R02e cannot resume without exact fresh native admission acceptance')
+        with self.ingress.lock:
+            active_ack = self.ingress.pending_ack
+            if (active_ack is None
+                    or self.ingress.admission_state != LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
+                    or bytes(active_ack.response.pending_admission_token) != bytes(pending_token)
+                    or self.ingress.last_published_sample_sequence != fresh_sample_sequence
+                    or self.ingress.admission_publication_enabled):
+                raise RuntimeError('R02e pending admission changed before fresh stream resume')
+            self.ingress.resume_admission_publication()
+        self.emit('R02E_FRESH_ADMISSION_STREAM_RESUMED', {
+            'step_index': step_index,
+            'transition_id': transition_id,
+            'pending_request_sequence': active_ack.request.request_sequence,
+            'accepted_sample_sequence': fresh_sample_sequence,
+            'steady_ns': self.now(),
+        })
+
     async def release_r02e_prebind_input_before_admission(self, *, held_sample,
             ack, deadline_ns):
         """Enqueue the old-token sample at native before allowing fresh samples."""
@@ -8073,6 +8099,13 @@ class TrainingWorkerIO:
         await self.tick_policy_after_deferred_scan_cutoff(
             deadline_ns=deadline, step_index=token.step_index,
             sample_sequence=target_sample_sequence)
+        if held_sample_sequence is not None:
+            self.resume_r02e_admission_after_acceptance(
+                acceptance=prebind_check,
+                fresh_sample_sequence=target_sample_sequence,
+                pending_token=ack.response.pending_admission_token,
+                step_index=token.step_index,
+                transition_id=token.transition_id)
         if (not getattr(self, 'fault_hooks', ())
                 and measurement_fault_case is None
                 and after_policy_applied is None

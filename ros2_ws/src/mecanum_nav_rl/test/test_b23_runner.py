@@ -6880,6 +6880,70 @@ def test_r02e_waits_for_delayed_native_acceptance_record(tmp_path):
     assert len(pauses) == 1
 
 
+def test_r02e_resumes_fresh_admission_only_after_exact_native_acceptance():
+    import threading
+    from types import SimpleNamespace
+    from mecanum_nav_rl.runtime_simulation.b23_runner import TrainingWorkerIO
+    from mecanum_nav_rl_interfaces.msg import LocalTrainingSafetyInput
+
+    token = bytes([0x52]) * 16
+    resumed = []
+    events = []
+    ingress = SimpleNamespace(
+        lock=threading.RLock(),
+        pending_ack=NS(response=NS(pending_admission_token=token),
+            request=NS(request_sequence=19)),
+        admission_state=LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN,
+        admission_publication_enabled=False,
+        last_published_sample_sequence=44,
+        resume_admission_publication=lambda: (resumed.append(True),
+            setattr(ingress, 'admission_publication_enabled', True)),
+    )
+    io = SimpleNamespace(ingress=ingress, now=lambda: 1234,
+        emit=lambda event, facts: events.append((event, facts)))
+    acceptance = {'postbind_sample_sequence':44,
+        'postbind_native_accept_count':1, 'pending_token_nonzero':True}
+
+    TrainingWorkerIO.resume_r02e_admission_after_acceptance(io,
+        acceptance=acceptance, fresh_sample_sequence=44,
+        pending_token=token, step_index=2, transition_id='step-two')
+
+    assert resumed == [True]
+    assert ingress.admission_publication_enabled is True
+    assert events == [('R02E_FRESH_ADMISSION_STREAM_RESUMED', {
+        'step_index':2, 'transition_id':'step-two',
+        'pending_request_sequence':19, 'accepted_sample_sequence':44,
+        'steady_ns':1234})]
+
+    for changed in (
+            {**acceptance, 'postbind_native_accept_count':0},
+            {**acceptance, 'postbind_sample_sequence':43},
+            {**acceptance, 'pending_token_nonzero':False}):
+        with pytest.raises(RuntimeError, match='exact fresh native admission'):
+            TrainingWorkerIO.resume_r02e_admission_after_acceptance(io,
+                acceptance=changed, fresh_sample_sequence=44,
+                pending_token=token, step_index=2, transition_id='step-two')
+    with pytest.raises(RuntimeError, match='pending admission changed'):
+        TrainingWorkerIO.resume_r02e_admission_after_acceptance(io,
+            acceptance=acceptance, fresh_sample_sequence=44,
+            pending_token=bytes([0x53])*16, step_index=2,
+            transition_id='step-two')
+    assert resumed == [True]
+
+
+def test_r02e_policy_step_resumes_refresh_after_exact_acceptance_and_policy_tick():
+    import inspect
+    import mecanum_nav_rl.runtime_simulation.b23_runner as module
+
+    source = textwrap.dedent(inspect.getsource(module.TrainingWorkerIO.policy_step))
+    accepted = source.index('wait_r02e_native_admission(')
+    verified = source.index('R02E_PREBIND_ADMISSION_REJECTED_AND_FRESH_ACCEPTED')
+    policy_tick = source.index('await self.tick_policy_after_deferred_scan_cutoff(')
+    resumed = source.index('self.resume_r02e_admission_after_acceptance(')
+    assert accepted < verified < policy_tick < resumed
+    assert 'if held_sample_sequence is not None:' in source[policy_tick:resumed]
+
+
 def test_r02e_wait_rejects_prebind_acceptance_while_native_log_is_pending(tmp_path):
     value, clock = worker()
     native = tmp_path/'native-events.jsonl'
