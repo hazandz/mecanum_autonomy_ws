@@ -6800,15 +6800,36 @@ class TrainingWorkerIO:
                     == LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
                 and not getattr(self.ingress, 'admission_publication_enabled', False)):
             self.ingress.resume_admission_publication()
-        if adapter.last_output is not None:
+        last_output = adapter.last_output
+        already_zero_safe_stop = False
+        if last_output is not None:
+            twist = getattr(last_output, 'twist', None)
+            linear = getattr(twist, 'linear', None)
+            angular = getattr(twist, 'angular', None)
+            already_zero_safe_stop = (
+                last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
+                and linear is not None and angular is not None
+                and not any((linear.x, linear.y, linear.z,
+                    angular.x, angular.y, angular.z)))
+        if last_output is not None and not already_zero_safe_stop:
             await drain_final_publication_before_close(
                 self, adapter, deadline_ns=deadline_ns,
                 event_name='STEP_PRE_CLOSE_OUTPUT_DRAINED')
+        elif already_zero_safe_stop:
+            # There is no open POLICY receipt to protect from a closing
+            # SAFE_STOP. Keep the already-zero SAFE_STOP stream running while
+            # the fresh inhibited input is drained; stopping it here can leave
+            # a publication gap longer than the native actuator watchdog when
+            # the executor is busy joining the receipt callback.
+            self.emit('STEP_PRE_CLOSE_ZERO_ALREADY_SAFE_STOP', {
+                'source': last_output.source,
+                'source_instance_id': last_output.source_instance_id,
+                'source_sequence': last_output.sequence,
+                'steady_ns': self.now()})
         adapter.set_stream_enabled(True)
-        # The last POLICY receipt is now joined. Publish the closing SAFE_STOP
-        # before waiting for another producer sample, so it cannot overtake
-        # an unapplied POLICY receipt and does not wait for a periodic timer
-        # interval that can consume the native watchdog at accelerated RTF.
+        # A pending POLICY output was joined above before this closing
+        # SAFE_STOP. If the stream was already a zero SAFE_STOP, it remained
+        # active while the same close barrier was refreshed below.
         adapter.tick()
         # Revoke the consumed slot token and let native observe a fresh
         # closing sample before freezing the stream.  Merely pausing here can

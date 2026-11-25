@@ -7463,7 +7463,8 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
         applied_receipt_valid=True, paused=False, applied_physics_iteration=304,
         applied_sim_stamp=NS(sec=3,nanosec=40_000_000))
     adapter = NS(safe_stop_sequence=7, last_output=NS(source=source, source_instance_id=44, sequence=7,
-        header=NS(stamp=NS(sec=3,nanosec=40_000_000))),
+        header=NS(stamp=NS(sec=3,nanosec=40_000_000)),
+        twist=NS(linear=NS(x=0., y=0., z=0.), angular=NS(x=0., y=0., z=0.))),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
         set_stream_enabled=lambda enabled: calls.append(('stream', enabled)),
         tick=lambda: calls.append(('immediate_safety_tick',)),
@@ -7536,31 +7537,54 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     asyncio.run(value.freeze_step_streams(deadline_ns=clock.ns+20_000_000))
     assert ('hold', True) in calls
     assert ('stream', True) in calls
-    assert ('stream', False) in calls
     assert ('inhibit', False) in calls
-    assert events[0][0] == 'SAFETY_OUTPUT_WRITER_ACKED'
-    assert events[1][0] == 'STEP_PRE_CLOSE_OUTPUT_DRAINED'
-    assert events[2][0] == 'INHIBITED_SAFETY_INPUT_DRAINED'
-    assert events[2][1]['sample_sequence'] == 10
-    assert events[2][1]['native_input_watermark'] == 10
+    if last_source == 'policy':
+        assert ('stream', False) in calls
+    else:
+        assert ('stream', False) not in calls
+    if last_source == 'safe_stop':
+        assert not any(call[0] == 'writer_ack' for call in calls)
+        assert events[0][0] == 'STEP_PRE_CLOSE_ZERO_ALREADY_SAFE_STOP'
+        assert events[1][0] == 'INHIBITED_SAFETY_INPUT_DRAINED'
+        assert events[1][1]['sample_sequence'] == 10
+        assert events[1][1]['native_input_watermark'] == 10
+    else:
+        assert events[0][0] == 'SAFETY_OUTPUT_WRITER_ACKED'
+        assert events[1][0] == 'STEP_PRE_CLOSE_OUTPUT_DRAINED'
+        assert events[2][0] == 'INHIBITED_SAFETY_INPUT_DRAINED'
+        assert events[2][1]['sample_sequence'] == 10
+        assert events[2][1]['native_input_watermark'] == 10
     names = [name for name, _ in events]
-    assert names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < names.index('INHIBITED_SAFETY_INPUT_DRAINED')
+    if last_source == 'policy':
+        assert names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < names.index('INHIBITED_SAFETY_INPUT_DRAINED')
+    else:
+        assert 'STEP_PRE_CLOSE_OUTPUT_DRAINED' not in names
+        assert names.index('STEP_PRE_CLOSE_ZERO_ALREADY_SAFE_STOP') < names.index(
+            'INHIBITED_SAFETY_INPUT_DRAINED')
     assert names.index('INHIBITED_SAFETY_INPUT_DRAINED') < names.index('ADMISSION_STREAM_FROZEN')
     assert names.index('ADMISSION_STREAM_FROZEN') < names.index('STEP_STREAMS_FROZEN')
     assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
     assert calls.index(('stream', True)) < calls.index(('immediate_safety_tick',)) < calls.index(('inhibit', False))
     assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
-    assert calls.index(('stream', False)) < calls.index(('stream', True))
-    assert calls.index(('writer_ack', 20_000_000)) < calls.index(('inhibit', False))
+    if last_source == 'policy':
+        assert calls.index(('stream', False)) < calls.index(('stream', True))
+        assert calls.index(('writer_ack', 20_000_000)) < calls.index(('inhibit', False))
+    else:
+        assert calls.index(('stream', True)) < calls.index(('immediate_safety_tick',))
+        assert not any(call[0] == 'writer_ack' for call in calls)
     if last_source == 'policy':
         assert calls.index(('resume_current_admission',)) < calls.index(('writer_ack', 20_000_000))
     else:
         assert ('resume_current_admission',) not in calls
     event_names = [name for name, _ in events]
-    assert event_names.index('SAFETY_OUTPUT_WRITER_ACKED') < event_names.index(
-        'STEP_PRE_CLOSE_OUTPUT_DRAINED')
-    assert event_names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < event_names.index(
-        'INHIBITED_SAFETY_INPUT_DRAINED')
+    if last_source == 'policy':
+        assert event_names.index('SAFETY_OUTPUT_WRITER_ACKED') < event_names.index(
+            'STEP_PRE_CLOSE_OUTPUT_DRAINED')
+        assert event_names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < event_names.index(
+            'INHIBITED_SAFETY_INPUT_DRAINED')
+    else:
+        assert event_names.index('STEP_PRE_CLOSE_ZERO_ALREADY_SAFE_STOP') < event_names.index(
+            'INHIBITED_SAFETY_INPUT_DRAINED')
     assert adapter.last_output.source == CommandEnvelope.SOURCE_SAFE_STOP
     assert calls.index(('hold', True)) < calls.index(('stream', True))
     assert events[-1][0] == 'STEP_STREAMS_FROZEN'
