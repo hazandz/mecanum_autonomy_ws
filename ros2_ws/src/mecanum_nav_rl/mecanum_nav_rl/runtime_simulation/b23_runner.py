@@ -8135,7 +8135,8 @@ class TrainingWorkerIO:
                 pending_token=ack.response.pending_admission_token,
                 step_index=token.step_index,
                 transition_id=token.transition_id)
-        if ((not active_hooks or active_hooks == ('pre_bind_admission_sample',))
+        if (active_hooks in ((), ('pre_bind_admission_sample',),
+                ('closing_paths_after_policy_nonzero',))
                 and measurement_fault_case is None
                 and after_policy_applied is None
                 and before_pending_bind is None

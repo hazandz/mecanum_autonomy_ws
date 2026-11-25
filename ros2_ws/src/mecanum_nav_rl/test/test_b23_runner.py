@@ -7984,7 +7984,7 @@ def test_r02d_inhibits_before_waiting_for_native_hold_marker():
 @pytest.mark.parametrize('timing', ['ready','near_scan_cutoff','late_commit','late_publish','r09b_callback',
     'r09b_before_bind','candidate_after_admission','pending_cutoff_dedup',
     'nominal_issued_cutoff','prebind_elapsed_deadline',
-    'admission_refresh_after_issue','r02e_first_slot'])
+    'admission_refresh_after_issue','r02e_first_slot','r02g_close_path'])
 def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timing):
     from builtin_interfaces.msg import Time
     from mecanum_nav_rl_interfaces.msg import CommandEnvelope, LocalTrainingSafetyInput, SafetyLifecycleState
@@ -7994,6 +7994,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     value, clock = worker()
     if timing == 'r02e_first_slot':
         value.fault_hooks = ('pre_bind_admission_sample',)
+    elif timing == 'r02g_close_path':
+        value.fault_hooks = ('closing_paths_after_policy_nonzero',)
     clock.ns += 20_000_000
     value.deadline_ns = clock.ns + 3_000_000_000
     ros = lambda: clock.ns
@@ -8228,7 +8230,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     commit_attempts = {}
     def commit(cutoff):
         commit_calls.append(cutoff)
-        if timing in ('admission_refresh_after_issue','r02e_first_slot'):
+        if timing in ('admission_refresh_after_issue','r02e_first_slot','r02g_close_path'):
             history.append(('commit_attempt', cutoff, admission_resumed[0]))
             if not admission_resumed[0]:
                 raise B1SnapshotPending('fresh admission stream has not resumed')
@@ -8288,7 +8290,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     if timing in ('ready','near_scan_cutoff','r09b_callback','r09b_before_bind',
             'candidate_after_admission','nominal_issued_cutoff',
             'prebind_elapsed_deadline','admission_refresh_after_issue',
-            'r02e_first_slot'):
+            'r02e_first_slot','r02g_close_path'):
         kwargs = ({'after_policy_applied':after_policy_applied}
             if timing=='r09b_callback' else
             {'before_pending_bind':before_pending_bind}
@@ -8322,7 +8324,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     if timing == 'nominal_issued_cutoff':
         assert commit_calls == [nominal_cutoff], (
             f'production runner skipped the actual post-issuance cutoff within the nominal 100 ms period: {commit_calls!r}')
-    if timing in ('admission_refresh_after_issue','r02e_first_slot'):
+    if timing in ('admission_refresh_after_issue','r02e_first_slot','r02g_close_path'):
         assert admission_resumed[0], f'normal POLICY step did not resume fresh admissions: {history!r}'
         resume_index = tags.index('admission_resume')
         issued_index = tags.index('issued')
@@ -8366,7 +8368,8 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     admission_published = next(i for i, row in enumerate(history)
         if row[0] == 'post_ack_admission_published')
     sample_ready = next(i for i, row in enumerate(history)
-        if row[0] == 'post_ack_admission_sample_ready')
+        if row[0] == 'post_ack_admission_sample_ready'
+        and (timing != 'r02g_close_path' or i > issued))
     assert admission_published < issued < hold_off_after_issue < stream_on_after_issue, (
         f'POLICY issuance must follow producer publication of the exact post-ACK admission: {history!r}')
     assert issued < sample_ready, (
