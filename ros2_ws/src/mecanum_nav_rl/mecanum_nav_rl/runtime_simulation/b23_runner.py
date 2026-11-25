@@ -9440,9 +9440,16 @@ def verify_packet(path, expected_sha256):
             or document['map_identity']['training_binding']['binding_status'] != 'BOUND'):
         raise ValueError('packet config/asset/scenario binding mismatch')
     root = Path(packet['run_root']).resolve(strict=True)
+    evidence_root = Path(packet.get('evidence_root', '/home/hazan/mecanum_runtime_evidence')).resolve(strict=True)
     canonical = Path('/home/hazan/mecanum_runtime_evidence').resolve(strict=True)
-    if not root.is_relative_to(canonical) or root == canonical:
-        raise ValueError('runtime evidence root outside canonical root')
+    local_root = Path('/home/hazan/mecanum_runtime_evidence_local').resolve(strict=False)
+    if evidence_root not in (canonical, local_root):
+        raise ValueError('runtime evidence root is not an approved B2.3 root')
+    if (evidence_root == local_root
+            and os.stat(evidence_root).st_dev != os.stat('/home/hazan').st_dev):
+        raise ValueError('local B2.3 evidence root is not on the internal home filesystem')
+    if not root.is_relative_to(evidence_root) or root == evidence_root:
+        raise ValueError('runtime evidence root outside packet-pinned root')
     if Path(packet['guard_path']).parent != Path('/home/hazan/.local/state/ros2_nav2_drl/b23'):
         raise ValueError('guard outside campaign state root')
     if packet['launch_plan']['commands'] != [list(b23_server_argv(packet['launch_plan']['world_file']))]:
@@ -9699,8 +9706,30 @@ def verify_postmortem_residue_attestation(attestation_path, *, run_id, packet_sh
         'residue_absent': True, 'cleanup_ack_present': bool(record.get('cleanup_ack_present'))}
 
 
+def _resolve_relocated_evidence_path(name, *, evidence_root, recorded_root):
+    """Resolve a legacy absolute evidence path under an explicitly relocated tree."""
+    root = Path(evidence_root).resolve(strict=True)
+    recorded = Path(recorded_root)
+    source = Path(name)
+    try:
+        relative = source.relative_to(recorded)
+    except ValueError:
+        candidate = source
+    else:
+        if '..' in relative.parts:
+            raise ValueError('residue revalidation evidence is outside pinned root')
+        candidate = root / relative
+    resolved = candidate.resolve(strict=True)
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise ValueError('residue revalidation evidence is outside pinned root') from error
+    return resolved
+
+
 def verify_residue_revalidation_attestation(attestation_path, *, run_id, packet_sha256,
         evidence_root='/home/hazan/mecanum_runtime_evidence',
+        recorded_evidence_root='/home/hazan/mecanum_runtime_evidence',
         cgroup_root='/sys/fs/cgroup', proc_root='/proc'):
     """Xác minh lại residue hiện tại khi raw postmortem lịch sử đã mất.
 
@@ -9737,18 +9766,17 @@ def verify_residue_revalidation_attestation(attestation_path, *, run_id, packet_
         'legacy_identity_source', 'legacy_source_record'}
     if not isinstance(evidence, dict) or not evidence or not isinstance(roles, dict) or not required.issubset(roles):
         raise ValueError('residue revalidation evidence inventory incomplete')
+    resolved_evidence = {}
     for name, digest in evidence.items():
-        item = Path(name).resolve(strict=True)
-        try:
-            item.relative_to(root)
-        except ValueError as error:
-            raise ValueError('residue revalidation evidence is outside canonical root') from error
+        item = _resolve_relocated_evidence_path(name, evidence_root=root,
+            recorded_root=recorded_evidence_root)
         if hashlib.sha256(item.read_bytes()).hexdigest() != digest:
             raise ValueError('residue revalidation evidence hash mismatch: ' + name)
+        resolved_evidence[name] = item
     if any(roles[name] not in evidence for name in required):
         raise ValueError('residue revalidation role is not hash-bound')
 
-    unit_record = json.loads(Path(roles['unit_properties']).read_bytes())
+    unit_record = json.loads(resolved_evidence[roles['unit_properties']].read_bytes())
     expected_property_list = ('Id,LoadState,ActiveState,SubState,Result,InvocationID,ControlGroup,'
         'MainPID,ExecMainPID,ExecMainCode,ExecMainStatus,ExecStart,Type,KillMode,RuntimeMaxUSec,'
         'RuntimeRandomizedExtraUSec,TimeoutStartUSec,TimeoutStopUSec,SendSIGKILL,KillSignal,'
@@ -9777,7 +9805,7 @@ def verify_residue_revalidation_attestation(attestation_path, *, run_id, packet_
             or props.get('InvocationID') != ''):
         raise ValueError('current unit query does not prove the exact unit absent')
 
-    cgroup_record = json.loads(Path(roles['pinned_cgroup']).read_bytes())
+    cgroup_record = json.loads(resolved_evidence[roles['pinned_cgroup']].read_bytes())
     expected_cgroup_path = str(Path(cgroup_root) / pinned_cgroup.lstrip('/'))
     if (cgroup_record.get('path') != expected_cgroup_path
             or cgroup_record.get('status') != 'path_removed_confirmed'
@@ -9801,10 +9829,10 @@ def verify_residue_revalidation_attestation(attestation_path, *, run_id, packet_
     else:
         raise ValueError('pinned cgroup reappeared after residue capture')
 
-    source = Path(roles['legacy_identity_source']).read_text()
+    source = resolved_evidence[roles['legacy_identity_source']].read_text()
     if recovery_history not in source:
         raise ValueError('historical identity inventory is not tied to prior attestation digest')
-    source_record_path = Path(roles['legacy_source_record'])
+    source_record_path = resolved_evidence[roles['legacy_source_record']]
     source_record_raw = source_record_path.read_bytes()
     source_record = json.loads(source_record_raw)
     source_output = '\n'.join(item.get('text', '') for item in
@@ -9838,7 +9866,7 @@ def verify_residue_revalidation_attestation(attestation_path, *, run_id, packet_
     expected = [{'pid': row.get('pid'), 'start_ticks': row.get('start_ticks')} for row in parsed]
     if saved != expected:
         raise ValueError('revalidated process identities differ from historical inventory')
-    proc_record = json.loads(Path(roles['process_identities']).read_bytes())
+    proc_record = json.loads(resolved_evidence[roles['process_identities']].read_bytes())
     proc_observations = proc_record.get('observations')
     if (proc_record.get('identities') != saved or not isinstance(proc_observations, list)
             or len(proc_observations) != len(saved)
@@ -9882,6 +9910,7 @@ def verify_residue_revalidation_attestation(attestation_path, *, run_id, packet_
 
 
 def verify_previous_run_residue(state_dir, previous, *, evidence_root,
+        recorded_evidence_root='/home/hazan/mecanum_runtime_evidence',
         cgroup_root='/sys/fs/cgroup', proc_root='/proc'):
     """Require a packet-bound residue proof for every previously consumed run."""
     authority_path = previous / 'authority.json'
@@ -9916,7 +9945,8 @@ def verify_previous_run_residue(state_dir, previous, *, evidence_root,
     try:
         result = verify_residue_revalidation_attestation(revalidation_path,
             run_id=run_id, packet_sha256=consumed['packet_sha256'],
-            evidence_root=evidence_root, cgroup_root=cgroup_root, proc_root=proc_root)
+            evidence_root=evidence_root, recorded_evidence_root=recorded_evidence_root,
+            cgroup_root=cgroup_root, proc_root=proc_root)
     except (OSError, KeyError, TypeError, ValueError, AttributeError) as error:
         raise RuntimeError('previous consumed run has unverified residue: ' + str(previous)) from error
     return {'run_id': run_id, 'source': str(revalidation_path),
@@ -10365,7 +10395,16 @@ def prepare_packet(args):
     import re
     if not re.fullmatch(r'B23_[A-Z0-9_]{1,60}', args.run_id):
         raise ValueError('run ID invalid')
-    root = Path('/home/hazan/mecanum_runtime_evidence')/args.run_id
+    evidence_root = Path(getattr(args, 'evidence_root', None)
+        or '/home/hazan/mecanum_runtime_evidence').resolve(strict=True)
+    canonical = Path('/home/hazan/mecanum_runtime_evidence').resolve(strict=True)
+    local_root = Path('/home/hazan/mecanum_runtime_evidence_local').resolve(strict=False)
+    if evidence_root not in (canonical, local_root):
+        raise ValueError('evidence root must be canonical or the approved internal B2.3 root')
+    if (evidence_root == local_root
+            and os.stat(evidence_root).st_dev != os.stat('/home/hazan').st_dev):
+        raise ValueError('internal B2.3 evidence root is not on the home filesystem')
+    root = evidence_root/args.run_id
     root.mkdir(mode=0o700)  # EEXIST giữ toàn bộ lượt cũ, không retry.
     (root/'trace').mkdir(mode=0o700)
     guard = Path('/home/hazan/.local/state/ros2_nav2_drl/b23')/args.run_id
@@ -10436,7 +10475,8 @@ def prepare_packet(args):
         'authority_reference': 'Owner approval B23_CAMPAIGN and standing authorization in task conversation',
         'source_commit': args.commit, 'source_repo': str(repo), 'install_prefix': str(prefix),
         'build_binding_sha256': hashlib.sha256(build_binding_raw).hexdigest(), 'python': str(Path(sys.executable).absolute()),
-        'run_root': str(root), 'guard_path': str(guard), 'active_s':active_s, 'cleanup_s':cleanup_s,
+        'run_root': str(root), 'evidence_root':str(evidence_root),
+        'guard_path': str(guard), 'active_s':active_s, 'cleanup_s':cleanup_s,
         'resolved_config': str(plan.resolved_config), 'config_hash':config_hash, 'asset_manifest_sha256':asset_hash,
         'asset_manifest':str(desc/'manifests/b2/asset_manifest.json'), 'scenario':str(scenario_path),
         'coordinator_ingress_instance_id':ingress, 'physics_engine_sha256':inputs[str(engine_file)],
@@ -10573,7 +10613,7 @@ def launch_packet(args):
         for previous in sorted(state.iterdir()):
             if previous.is_dir() and (previous/'consumed.json').exists():
                 predecessor = verify_previous_run_residue(state, previous,
-                    evidence_root='/home/hazan/mecanum_runtime_evidence')
+                    evidence_root=packet.get('evidence_root', '/home/hazan/mecanum_runtime_evidence'))
                 log.record('PREVIOUS_RUN_RESIDUE_VERIFIED', predecessor)
         preflight = command_record(['systemctl','--user','show','--property=SystemState','--value'], timeout_s=5.)
         log.record('USER_MANAGER', preflight)
@@ -10788,6 +10828,7 @@ def main(argv=None):
     prepare = commands.add_parser('prepare')
     for key in ('repo','commit','install','build-binding','run-id'):
         prepare.add_argument('--'+key, required=True)
+    prepare.add_argument('--evidence-root')
     prepare.add_argument('--case', choices=tuple(CASE_HOOKS), default='R01a')
     prepare.add_argument('--fault-hook', choices=tuple(sorted({hook for hooks in CASE_HOOKS.values() for hook in hooks})))
     prepare.add_argument('--junit', action='append', required=True)

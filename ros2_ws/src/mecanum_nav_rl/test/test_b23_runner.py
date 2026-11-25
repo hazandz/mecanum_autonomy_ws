@@ -9469,6 +9469,45 @@ def test_residue_revalidation_requires_live_unit_cgroup_and_process_absence(tmp_
             cgroup_root=cgroup_root, proc_root=proc_root)
 
 
+def test_residue_revalidation_maps_legacy_absolute_paths_under_explicit_local_root(tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import (
+        verify_previous_run_residue, verify_residue_revalidation_attestation)
+
+    evidence_root, run_id, packet_hash, attestation, cgroup_root, proc_root, guard, _roles = \
+        _residue_revalidation_fixture(tmp_path)
+    record = json.loads(attestation.read_text())
+    recorded_root = Path('/home/hazan/mecanum_runtime_evidence')
+    relocated_evidence = {}
+    relocated_roles = {}
+    for old_path, digest in record['evidence_files'].items():
+        relative = Path(old_path).relative_to(evidence_root)
+        relocated_evidence[str(recorded_root / relative)] = digest
+    for role, old_path in record['evidence_roles'].items():
+        relative = Path(old_path).relative_to(evidence_root)
+        relocated_roles[role] = str(recorded_root / relative)
+    record['evidence_files'] = relocated_evidence
+    record['evidence_roles'] = relocated_roles
+    attestation.write_text(json.dumps(record, sort_keys=True))
+
+    result = verify_residue_revalidation_attestation(attestation, run_id=run_id,
+        packet_sha256=packet_hash, evidence_root=evidence_root,
+        recorded_evidence_root=recorded_root,
+        cgroup_root=cgroup_root, proc_root=proc_root)
+    assert result['residue_absent'] is True
+    verified = verify_previous_run_residue(guard.parent, guard,
+        evidence_root=evidence_root, recorded_evidence_root=recorded_root,
+        cgroup_root=cgroup_root, proc_root=proc_root)
+    assert verified['residue_revalidation']['residue_absent'] is True
+
+    record['evidence_files'][str(recorded_root / '..' / 'outside.json')] = '0' * 64
+    attestation.write_text(json.dumps(record, sort_keys=True))
+    with pytest.raises(ValueError, match='outside pinned root'):
+        verify_residue_revalidation_attestation(attestation, run_id=run_id,
+            packet_sha256=packet_hash, evidence_root=evidence_root,
+            recorded_evidence_root=recorded_root,
+            cgroup_root=cgroup_root, proc_root=proc_root)
+
+
 def test_residue_revalidation_rejects_present_pinned_process_identity(tmp_path):
     from mecanum_nav_rl.runtime_simulation.b23_runner import verify_residue_revalidation_attestation
 
