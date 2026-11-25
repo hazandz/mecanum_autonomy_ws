@@ -1210,7 +1210,12 @@ public:
     if (state_pub_ || backend_state_sink_)
     {
       const auto backend_publish_started_ns = steady_clock_now_();
-      const auto backend_status_lock_wait_ns = PublishBackendState(info, sim_ns);
+      std::int64_t backend_trace_before_ns = 0;
+      std::int64_t backend_ros_publish_ns = 0;
+      std::int64_t backend_trace_after_ns = 0;
+      const auto backend_status_lock_wait_ns = PublishBackendState(
+          info, sim_ns, &backend_trace_before_ns,
+          &backend_ros_publish_ns, &backend_trace_after_ns);
       const auto backend_publish_elapsed_ns =
           steady_clock_now_() - backend_publish_started_ns;
       const auto post_update_elapsed_ns = steady_clock_now_() - post_update_started_ns;
@@ -1223,6 +1228,9 @@ public:
               << " ground_truth_publish_ns=" << ground_truth_publish_elapsed_ns
               << " backend_status_lock_wait_ns=" << backend_status_lock_wait_ns
               << " backend_status_publish_ns=" << backend_publish_elapsed_ns
+              << " backend_trace_before_ns=" << backend_trace_before_ns
+              << " backend_ros_publish_ns=" << backend_ros_publish_ns
+              << " backend_trace_after_ns=" << backend_trace_after_ns
               << " total_ns=" << post_update_elapsed_ns << std::endl;
           std::fflush(stdout);
         });
@@ -4262,7 +4270,11 @@ private:
     gt_publisher_->Publish(msg);
   }
 
-  std::int64_t PublishBackendState(const gz::sim::UpdateInfo &info, std::int64_t stamp_ns)
+  std::int64_t PublishBackendState(
+      const gz::sim::UpdateInfo &info, std::int64_t stamp_ns,
+      std::int64_t *trace_before_elapsed_ns,
+      std::int64_t *ros_publish_elapsed_ns,
+      std::int64_t *trace_after_elapsed_ns)
   {
     const auto lock_wait_started_ns = steady_clock_now_();
     std::lock_guard<std::mutex> status_lock(status_publish_mutex_);
@@ -4326,8 +4338,12 @@ private:
     }
     else
     {
+      const auto trace_before_started_ns = steady_clock_now_();
       if (heartbeat_trace_writer_)
         RecordHeartbeatTrace(1, msg.status_sequence);
+      if (trace_before_elapsed_ns)
+        *trace_before_elapsed_ns = steady_clock_now_() - trace_before_started_ns;
+      const auto ros_publish_started_ns = steady_clock_now_();
       try
       {
         state_pub_->publish(msg);
@@ -4338,8 +4354,13 @@ private:
           RecordHeartbeatTrace(3, msg.status_sequence);
         throw;
       }
+      if (ros_publish_elapsed_ns)
+        *ros_publish_elapsed_ns = steady_clock_now_() - ros_publish_started_ns;
+      const auto trace_after_started_ns = steady_clock_now_();
       if (heartbeat_trace_writer_)
         RecordHeartbeatTrace(2, msg.status_sequence);
+      if (trace_after_elapsed_ns)
+        *trace_after_elapsed_ns = steady_clock_now_() - trace_after_started_ns;
     }
     if (pending_applied_receipt_)
       last_accepted_key_ = pending_applied_receipt_->key;
