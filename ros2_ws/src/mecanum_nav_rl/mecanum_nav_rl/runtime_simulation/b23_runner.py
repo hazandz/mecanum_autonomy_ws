@@ -6,6 +6,7 @@ sau khi controller đã consume đúng packet và pin context của transient un
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import hashlib
 import json
@@ -948,6 +949,33 @@ def policy_receipt_count(receipts):
     """Count copied receipt-v2 views using the pure-core source enum."""
     from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
     return sum(1 for receipt in receipts if receipt.source == ReceiptSource.POLICY)
+
+
+def ingress_receipt_snapshot(ingress):
+    """Copy callback-owned receipt history while holding its producer lock."""
+    lock = getattr(ingress, 'lock', None)
+    if lock is None:
+        return tuple(ingress.receipts)
+    with lock:
+        return tuple(ingress.receipts)
+
+
+def ingress_physics_pair_snapshot(ingress):
+    """Copy callback-owned physics history while holding its producer lock."""
+    lock = getattr(ingress, 'lock', None)
+    if lock is None:
+        return tuple(ingress.physics_pairs)
+    with lock:
+        return tuple(ingress.physics_pairs)
+
+
+def ingress_receipt_state_snapshot(ingress):
+    """Copy receipt views and their raw CDR map under one callback lock."""
+    lock = getattr(ingress, 'lock', None)
+    if lock is None:
+        return tuple(ingress.receipts), dict(ingress._receipt_bytes)
+    with lock:
+        return tuple(ingress.receipts), dict(ingress._receipt_bytes)
 
 
 def policy_step_identities(receipts):
@@ -2183,7 +2211,7 @@ def verify_r02f_safety_hold(io, *, step_index, receipt, backend_state):
             or backend_state.applied_final_publish_sequence != receipt.final_publish_sequence):
         raise RuntimeError('R02f native backend did not apply the exact SAFE_STOP receipt')
     if any(item.source is ReceiptSource.POLICY and item.sequence == step_index
-            for item in io.ingress.receipts):
+            for item in ingress_receipt_snapshot(io.ingress)):
         raise RuntimeError('R02f issued POLICY reached the final receipt/backend path')
     return {'safety_rejected':True,'reasons':list(rejected.get('reasons', ())),
         'safe_stop_applied':True,'final_publish_sequence':receipt.final_publish_sequence,
@@ -2407,7 +2435,8 @@ def verify_r04a_next_step_blocked(io, *, step_index):
             for name, facts in io.events):
         raise RuntimeError('R04a B1 committed the POLICY slot after delayed-input invalidation')
     if any(getattr(receipt, 'source_sequence', None) == step_index
-            and getattr(receipt, 'source', None) == 1 for receipt in io.ingress.receipts):
+            and getattr(receipt, 'source', None) == 1
+            for receipt in ingress_receipt_snapshot(io.ingress)):
         raise RuntimeError('R04a POLICY receipt for the blocked slot reached native ingress')
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     rejection_ns = rejected.get('steady_ns')
@@ -2478,7 +2507,8 @@ def verify_r04c_next_step_blocked(io, *, step_index, delayed_delivery_ns):
             and facts.get('step_index') == step_index for name, facts in io.events):
         raise RuntimeError('R04c committed the blocked POLICY slot')
     if any(getattr(receipt, 'source_sequence', None) == step_index
-            and getattr(receipt, 'source', None) == 1 for receipt in io.ingress.receipts):
+            and getattr(receipt, 'source', None) == 1
+            for receipt in ingress_receipt_snapshot(io.ingress)):
         raise RuntimeError('R04c POLICY receipt for the stale-scan slot reached native ingress')
     from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
     applied_zero = None
@@ -2825,7 +2855,7 @@ def verify_r02g_close(io, *, route, policy_receipt_count, zero_receipt=None,
     # not support slicing. Snapshot it under the callback lock before checking
     # the post-close suffix so the runtime path and offline fixtures agree.
     with io.ingress.lock:
-        receipts_after_close = tuple(io.ingress.receipts)[policy_receipt_count:]
+        receipts_after_close = ingress_receipt_snapshot(io.ingress)[policy_receipt_count:]
     if any(item.source is ReceiptSource.POLICY for item in receipts_after_close):
         raise RuntimeError('R02g observed POLICY receipt after the close trigger')
     return {'route':route, 'closing_ack_applied':route == 'op_inhibit',
@@ -3382,7 +3412,7 @@ def r02d_closing_safe_stop_receipt(io, *, policy_receipt, safe_stop_sequence_bef
         return None
     identity = lifecycle_identity(lifecycle)
     with io.ingress.lock:
-        views = tuple(io.ingress.receipts)
+        views = ingress_receipt_snapshot(io.ingress)
     for view in reversed(views):
         if (view.source is not ReceiptSource.SAFE_STOP
                 or view.final_publisher_instance_id != io.final.publisher_instance_id
@@ -3437,10 +3467,16 @@ class FinalPublicationView:
     def last_publication(self):
         from rclpy.serialization import deserialize_message
         from mecanum_nav_rl_interfaces.msg import FinalIssuedCommandReceipt
-        if self.ingress is None or not self.ingress.receipts:
+        if self.ingress is None:
             return None
-        sequence = self.ingress.receipts[-1].final_publish_sequence
-        return deserialize_message(self.ingress._receipt_bytes[sequence], FinalIssuedCommandReceipt)
+        with self.ingress.lock if hasattr(self.ingress, 'lock') else contextlib.nullcontext():
+            if not self.ingress.receipts:
+                return None
+            sequence = self.ingress.receipts[-1].final_publish_sequence
+            raw = self.ingress._receipt_bytes.get(sequence)
+        if raw is None:
+            return None
+        return deserialize_message(raw, FinalIssuedCommandReceipt)
 
     def publication_for_source_sequence(self, *, source, sequence):
         """Select the retained receipt for one exact Safety output identity."""
@@ -3453,10 +3489,11 @@ class FinalPublicationView:
             FinalIssuedCommandReceipt.SOURCE_SAFE_STOP: ReceiptSource.SAFE_STOP}.get(source)
         if expected is None:
             return None
-        for view in reversed(self.ingress.receipts):
+        retained_views, retained_bytes = ingress_receipt_state_snapshot(self.ingress)
+        for view in reversed(retained_views):
             if (view.source is expected and view.source_sequence == sequence
                     and view.final_publisher_instance_id == self.publisher_instance_id):
-                raw = self.ingress._receipt_bytes.get(view.final_publish_sequence)
+                raw = retained_bytes.get(view.final_publish_sequence)
                 if raw is None:
                     return None
                 receipt = deserialize_message(raw, FinalIssuedCommandReceipt)
@@ -3482,9 +3519,7 @@ class FinalPublicationView:
         lifecycle = (output.episode_generation, output.reset_epoch, output.runtime_generation)
         stamp = stamp_ns(output.header.stamp)
         command = (output.twist.linear.x, output.twist.linear.y, output.twist.angular.z)
-        with self.ingress.lock:
-            retained_views = tuple(self.ingress.receipts)
-            retained_bytes = dict(self.ingress._receipt_bytes)
+        retained_views, retained_bytes = ingress_receipt_state_snapshot(self.ingress)
         for view in reversed(retained_views):
             if (view.source is not expected
                     or view.source_sequence != output.sequence
@@ -5772,7 +5807,7 @@ class TrainingWorkerIO:
             source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=target),
             deadline_ns=deadline_ns, phase='final SAFE_STOP drain')
         def applied():
-            for pair in reversed(self.ingress.physics_pairs):
+            for pair in reversed(ingress_physics_pair_snapshot(self.ingress)):
                 from rclpy.serialization import deserialize_message
                 from mecanum_nav_rl_interfaces.msg import SimulationContactState
                 state = deserialize_message(pair.backend_bytes, SimulationContactState)
@@ -6089,7 +6124,7 @@ class TrainingWorkerIO:
         await self.until(lambda: self.fresh_reset_scan(now_ros_ns=self.ros_now(), now_steady_ns=self.now()),
             deadline_ns=deadline_ns, phase='fresh reset scan')
         while self.now() < deadline_ns:
-            pair = await self.until(lambda: next((value for value in self.ingress.physics_pairs
+            pair = await self.until(lambda: next((value for value in ingress_physics_pair_snapshot(self.ingress)
                 if value.iteration > last), None), deadline_ns=deadline_ns, phase='fresh reset physics pair')
             oracle = deserialize_message(pair.oracle_bytes, Odometry)
             status = deserialize_message(pair.backend_bytes, SimulationContactState)
@@ -6141,9 +6176,9 @@ class TrainingWorkerIO:
             self.ingress.reset_noise(seed)
         self.ingress.inhibit()
         self.safety.local_training.set_stream_enabled(True)
-        await self.until(lambda: self.ingress.physics_pairs and self.ingress.physics_pairs[-1],
+        await self.until(lambda: ingress_physics_pair_snapshot(self.ingress),
                          deadline_ns=deadline, phase='L1 actual physics context')
-        before = self.ingress.physics_pairs[-1].iteration
+        before = ingress_physics_pair_snapshot(self.ingress)[-1].iteration
         async def native_pause(fact, timeout):
             budget_ms = min(100, max(0, (deadline - self.now()) // 1_000_000))
             if budget_ms == 0:
@@ -6175,7 +6210,8 @@ class TrainingWorkerIO:
             return result
         adapter = LocalTrainingResetAdapter(self, self.paused_state,
             lambda: self.measurements(deadline_ns=deadline, after_iteration=(
-                self.ingress.physics_pairs[-1].iteration if self.ingress.physics_pairs else 0)),
+                ingress_physics_pair_snapshot(self.ingress)[-1].iteration
+                if ingress_physics_pair_snapshot(self.ingress) else 0)),
             expected_session_id=self.descriptor['session_id'], expected_config_hash=self.descriptor['config_hash'],
             expected_backend_instance_id=self.descriptor['backend_instance_id'],
             expected_reset_epoch=l1.reset_epoch, expected_episode_generation=l1.episode_generation,
@@ -6605,8 +6641,7 @@ class TrainingWorkerIO:
             if life is None:
                 return None
             identity = lifecycle_identity(life)
-            with self.ingress.lock:
-                views = tuple(self.ingress.receipts)
+            views = ingress_receipt_snapshot(self.ingress)
             for view in reversed(views):
                 if (view.source is not ReceiptSource.SAFE_STOP
                         or view.final_publisher_instance_id != self.final.publisher_instance_id
@@ -6793,7 +6828,7 @@ class TrainingWorkerIO:
             return zero_witness
 
         target_cutoff_ns = now_ros_ns + remaining_ns
-        baseline = max((receipt.final_publish_sequence for receipt in self.ingress.receipts
+        baseline = max((receipt.final_publish_sequence for receipt in ingress_receipt_snapshot(self.ingress)
             if receipt.final_publisher_instance_id == self.final.publisher_instance_id
             and receipt.source is ReceiptSource.SAFE_STOP), default=0)
 
@@ -6806,7 +6841,7 @@ class TrainingWorkerIO:
             state = self.ingress.backend_state
             if state is None or state.fault_flags != 0 or state.paused:
                 return None
-            for receipt in reversed(tuple(self.ingress.receipts)):
+            for receipt in reversed(ingress_receipt_snapshot(self.ingress)):
                 if (receipt.final_publish_sequence <= baseline
                         or receipt.source is not ReceiptSource.SAFE_STOP
                         or receipt.final_publisher_instance_id != self.final.publisher_instance_id
@@ -7082,7 +7117,7 @@ class TrainingWorkerIO:
                             or latest_application.final_publisher_instance_id != self.final.publisher_instance_id
                             or any(latest_application.final_command))):
                     raise RuntimeError('pre-bind latest native application is not a SAFE_STOP zero')
-            for receipt in reversed(tuple(self.ingress.receipts)):
+            for receipt in reversed(ingress_receipt_snapshot(self.ingress)):
                 if (receipt.source is not ReceiptSource.SAFE_STOP
                         or receipt.source_instance_id != self.ingress.safe_stop_source_id
                         or receipt.source_sequence <= baseline_sequence
@@ -8998,7 +9033,8 @@ async def training_child(path):
                 transition = await io.policy_step(b1, (0., 0., 0.),
                     before_pending_bind=move_fixture_before_pending_bind)
                 committed_steps = 1
-                pair = io.ingress.physics_pairs[-1] if io.ingress.physics_pairs else None
+                pairs = ingress_physics_pair_snapshot(io.ingress)
+                pair = pairs[-1] if pairs else None
                 progress = []
                 if pair is not None:
                     oracle = deserialize_message(pair.oracle_bytes, Odometry)
@@ -9132,8 +9168,9 @@ async def training_child(path):
             transition = await io.policy_step(b1, (0.20, 0.0, 0.0))
             if transition.termination.terminated or transition.termination.truncated:
                 raise RuntimeError('R07a POLICY step terminated before external pause')
-            before_policy = policy_receipt_count(io.ingress.receipts)
-            before_policy_identities = policy_step_identities(io.ingress.receipts)
+            receipts_before_policy = ingress_receipt_snapshot(io.ingress)
+            before_policy = policy_receipt_count(receipts_before_policy)
+            before_policy_identities = policy_step_identities(receipts_before_policy)
             reset_fact_before = b1.lifecycle.snapshot.reset_commit_facts
             previous_ros = io.ros_now()
             io.expected_paused = True
@@ -9156,8 +9193,9 @@ async def training_child(path):
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 phase='R07a native unexpected-pause zero/fault',
                 expected_native_fault_flags=1)
-            policy_after = policy_receipt_count(io.ingress.receipts)
-            policy_after_identities = policy_step_identities(io.ingress.receipts)
+            receipts_after_policy = ingress_receipt_snapshot(io.ingress)
+            policy_after = policy_receipt_count(receipts_after_policy)
+            policy_after_identities = policy_step_identities(receipts_after_policy)
             io.emit('B23_R07A_POLICY_OBSERVATION', {
                 'post_pause_policy_receipt_count':policy_after,
                 'post_pause_policy_step_identities':sorted(policy_after_identities, key=repr),
@@ -9193,7 +9231,8 @@ async def training_child(path):
                 deadline_ns=min(io.deadline_ns, io.now()+1_000_000_000),
                 phase='R07a resumed gate invalidation remains zero/inhibited',
                 expected_native_fault_flags=(1, resumed_fault_flags))
-            post_resume_policy_identities = policy_step_identities(io.ingress.receipts)
+            post_resume_policy_identities = policy_step_identities(
+                ingress_receipt_snapshot(io.ingress))
             resumed_checked = verify_r07a_resumed_inhibition(
                 backend_state=resumed_gate_state,
                 pre_pause_policy_step_identities=before_policy_identities,
@@ -9439,7 +9478,8 @@ async def training_child(path):
                 phase='R07d post-restart native zero/inhibit status',
                 expected_native_fault_flags=expected_fault_flags)
             status = r07d_backend_status_record(state, io.ingress.backend_received_ns)
-            new_receipts = [receipt.final_publish_sequence for receipt in io.ingress.receipts
+            new_receipts = [receipt.final_publish_sequence
+                for receipt in ingress_receipt_snapshot(io.ingress)
                 if receipt.final_publisher_instance_id == replacement['publisher_instance_id']]
             checked = verify_r07d_final_publisher_restart(
                 old_publisher_instance_id=old_publisher,
@@ -9556,7 +9596,7 @@ async def training_child(path):
                         expected_native_fault_flags=(SimulationContactState.FAULT_COMMAND_SEQUENCE
                             | SimulationContactState.FAULT_COMMAND_STALE))
                     result = verify_r02g_close(io, route=route,
-                        policy_receipt_count=len(io.ingress.receipts), backend_state=state,
+                        policy_receipt_count=len(ingress_receipt_snapshot(io.ingress)), backend_state=state,
                         control_ack=control_ack)
                     io.emit('R02G_CLOSING_PATH_VERIFIED', {**result,
                         'policy_transition_id':b1.lifecycle.snapshot.committed_transition_ids[-1],
@@ -9586,7 +9626,7 @@ async def training_child(path):
                     route=route)
                 state = application['state']
                 result = verify_r02g_close(io, route=route,
-                    policy_receipt_count=len(io.ingress.receipts), zero_receipt=receipt,
+                    policy_receipt_count=len(ingress_receipt_snapshot(io.ingress)), zero_receipt=receipt,
                     backend_state=state)
                 io.emit('R02G_CLOSING_PATH_VERIFIED', {**result,
                     'safe_stop_sequence':stop.sequence,
@@ -9847,7 +9887,8 @@ async def training_child(path):
                             else b1.lifecycle.snapshot.step_index + 1)
                         blocked = verify_r04a_next_step_blocked(io, step_index=blocked_step)
                         zero_baseline = verify_r04a_zero_baseline(io, checked=blocked)
-                        if any(getattr(item, 'source', None) == 1 for item in io.ingress.receipts):
+                        if any(getattr(item, 'source', None) == 1
+                                for item in ingress_receipt_snapshot(io.ingress)):
                             raise RuntimeError('R04a POLICY receipt reached native ingress after delay fault')
                         aborted = b1.lifecycle.abort_step('R04a_delayed_noisy_input_rejected')
                         outcome = {'case':'R04a','resets_confirmed':1,'policy_steps_committed':0,
@@ -9869,7 +9910,7 @@ async def training_child(path):
                             transition_identity=b1.lifecycle.snapshot.active_transition_identity,
                             run_id=packet['run_id'],
                             invocation_id=io.descriptor['invocation_id'],
-                            policy_receipts=io.ingress.receipts,
+                            policy_receipts=ingress_receipt_snapshot(io.ingress),
                             final_rows=(_ledger_rows(run_root, 'policy_final_published.jsonl')
                                 if (run_root/'policy_final_published.jsonl').exists() else []),
                             applied_rows=(_ledger_rows(run_root, 'policy_backend_applied.jsonl')
@@ -9895,7 +9936,8 @@ async def training_child(path):
                                     or native_state.applied_final_publish_sequence != receipt.final_publish_sequence
                                     or not native_state.applied_receipt_valid):
                                 raise RuntimeError('R04b timeout lacks exact native SAFE_STOP application') from error
-                        if any(getattr(item, 'source', None) == 1 for item in io.ingress.receipts):
+                        if any(getattr(item, 'source', None) == 1
+                                for item in ingress_receipt_snapshot(io.ingress)):
                             raise RuntimeError('R04b POLICY receipt reached the native ingress')
                         outcome = {'case':'R04b','resets_confirmed':1,'policy_steps_committed':0,
                             'expected_rejection':True,'failure_mode':'post-ACK noisy admission was dropped before Safety received it',

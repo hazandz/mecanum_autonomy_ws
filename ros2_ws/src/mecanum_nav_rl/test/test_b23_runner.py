@@ -49,6 +49,7 @@ from mecanum_nav_rl.runtime_simulation.b23_runner import (
     parse_worker_scheduler_snapshot, worker_thread_identity_snapshot,
     worker_async_task_snapshot, spin_ready_callback_batch,
     spin_worker_executor_until_stopped, spin_receipt_executor_until_stopped,
+    ingress_receipt_snapshot, ingress_physics_pair_snapshot,
     instrument_executor_waits,
     r08_final_callback_diagnostic,
 )
@@ -86,6 +87,45 @@ def test_worker_failure_evidence_preserves_exception_cause_chain():
             {'type':'builtins.RuntimeError', 'repr':"RuntimeError('executor callback failed')"},
             {'type':'builtins.ValueError', 'repr':"ValueError('callback source detail')"},
         ]
+
+
+def test_ingress_history_snapshots_are_safe_during_callback_appends():
+    from collections import deque
+    from mecanum_nav_rl.core.issued_command_cutoff import ReceiptSource
+
+    ingress = NS(lock=threading.RLock(), receipts=deque(maxlen=128),
+        physics_pairs=deque(maxlen=64))
+    stop = threading.Event()
+    failures = []
+
+    def callback_writer():
+        try:
+            sequence = 0
+            while not stop.is_set():
+                sequence += 1
+                with ingress.lock:
+                    ingress.receipts.append(NS(source=ReceiptSource.POLICY,
+                        final_publish_sequence=sequence))
+                    ingress.physics_pairs.append(NS(iteration=sequence))
+        except BaseException as error:
+            failures.append(error)
+
+    writer = threading.Thread(target=callback_writer, name='fake-ingress-callback')
+    writer.start()
+    try:
+        for _ in range(5000):
+            receipts = ingress_receipt_snapshot(ingress)
+            pairs = ingress_physics_pair_snapshot(ingress)
+            assert isinstance(receipts, tuple) and len(receipts) <= 128
+            assert isinstance(pairs, tuple) and len(pairs) <= 64
+            # Iteration is the operation that raised in the consumed R01a run.
+            tuple(item.final_publish_sequence for item in receipts)
+            tuple(item.iteration for item in pairs)
+    finally:
+        stop.set()
+        writer.join(timeout=2)
+    assert not writer.is_alive()
+    assert failures == []
 
 
 def test_worker_latency_diagnostic_separates_wall_gap_from_thread_cpu():
