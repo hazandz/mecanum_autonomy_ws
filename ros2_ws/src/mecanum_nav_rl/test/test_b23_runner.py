@@ -6725,7 +6725,8 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
         applied_sim_stamp=NS(sec=3,nanosec=40_000_000))
     adapter = NS(safe_stop_sequence=7, last_output=NS(source=source, source_instance_id=44, sequence=7),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
-        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)))
+        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)),
+        tick=lambda: calls.append(('immediate_safety_tick',)))
     value.safety = NS(local_training=adapter)
     value.ingress.last_published_sample_sequence = 9
     value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
@@ -6796,6 +6797,7 @@ def test_freeze_step_streams_keeps_zero_receipts_alive_under_native_watchdog(las
     assert names.index('INHIBITED_SAFETY_INPUT_DRAINED') < names.index('ADMISSION_STREAM_FROZEN')
     assert names.index('ADMISSION_STREAM_FROZEN') < names.index('STEP_STREAMS_FROZEN')
     assert calls.index(('inhibit', False)) < calls.index(('pause_admission',))
+    assert calls.index(('inhibit', False)) < calls.index(('immediate_safety_tick',)) < calls.index(('pause_admission',))
     assert calls.index(('stream', False)) < calls.index(('stream', True))
     event_names = [name for name, _ in events]
     assert event_names.index('STEP_PRE_CLOSE_OUTPUT_DRAINED') < event_names.index(
@@ -6837,7 +6839,8 @@ def test_freeze_step_streams_recovers_from_coalesced_exact_safe_stop_receipt():
     adapter = NS(safe_stop_sequence=7,
         last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
-        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)))
+        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)),
+        tick=lambda: calls.append(('immediate_safety_tick',)))
     value.safety = NS(local_training=adapter)
     value.ingress = NS(fault=None, backend_state=state, lifecycle=life,
         last_published_sample_sequence=9,
@@ -7012,7 +7015,8 @@ def test_freeze_step_streams_uses_retained_exact_application_when_latest_status_
     adapter = NS(safe_stop_sequence=7,
         last_output=NS(source=CommandEnvelope.SOURCE_SAFE_STOP, source_instance_id=44, sequence=7),
         set_policy_hold=lambda hold: calls.append(('hold', hold)),
-        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)))
+        set_stream_enabled=lambda enabled: calls.append(('stream', enabled)),
+        tick=lambda: calls.append(('immediate_safety_tick',)))
     value.safety = NS(local_training=adapter)
     value.ingress.last_published_sample_sequence = 9
     value.ingress.last_published_admission_state = LocalTrainingSafetyInput.ADMISSION_POLICY_OPEN
@@ -7294,7 +7298,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
             value.ingress.backend_received_ns = clock.ns
     def safety_tick():
         history.append(('safety_tick', clock.ns))
-        if timing == 'near_scan_cutoff':
+        if timing == 'near_scan_cutoff' and adapter.command is not None:
             if adapter._last_deferred_scan_cutoff_ns is None:
                 adapter._last_deferred_scan_cutoff_ns = 1_100_000_000
             else:
