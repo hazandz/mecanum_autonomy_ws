@@ -3885,6 +3885,7 @@ class TrainingWorkerIO:
         self._hold_next_safety_input = False
         self._held_safety_input = None
         self._r04d_fault_state = None
+        self._r04d_baseline_lifecycle = None
         self._r04d_backend_statuses = []
         self._r04d_pending_ingress_lifecycle = None
         self._r06b_measurement_fault = {'active':False, 'yielded':False, 'dropped':False}
@@ -4313,6 +4314,22 @@ class TrainingWorkerIO:
                         and self._r04d_fault_state is not None
                         and self._r04d_pending_ingress_lifecycle is None
                         and not self._r04d_fault_state.get('ingress_scheduled')):
+                    baseline = self._r04d_baseline_lifecycle
+                    if baseline is None:
+                        raise RuntimeError('R04d lifecycle baseline was not pinned before hook activation')
+                    baseline_identity = (int(baseline.episode_generation),
+                        int(baseline.reset_epoch), int(baseline.runtime_generation))
+                    message_identity = (int(message.episode_generation),
+                        int(message.reset_epoch), int(message.runtime_generation))
+                    if (int(message.sequence) <= int(baseline.sequence)
+                            or message_identity == baseline_identity):
+                        self.emit('B23_R04_INGRESS_BASELINE_LIFECYCLE_PASSTHROUGH', {
+                            'sequence':int(message.sequence),
+                            'identity':list(message_identity),
+                            'baseline_sequence':int(baseline.sequence),
+                            'baseline_identity':list(baseline_identity),
+                            'received_ns':self.now()})
+                        return callback(message)
                     state = self._r04d_fault_state
                     state['ingress_scheduled'] = True
                     delay_s = r04d_ingress_lifecycle_delay_s(state['delay_s'])
@@ -9543,6 +9560,7 @@ async def training_child(path):
                 baseline_lifecycle = io.ingress.lifecycle
                 if baseline_lifecycle is None:
                     raise RuntimeError('R04d requires a bound lifecycle before fault arming')
+                io._r04d_baseline_lifecycle = copy.deepcopy(baseline_lifecycle)
                 marker_path = Path(packet['run_root'])/'r04d-final-lifecycle-delay.json'
                 marker_write_started_ns = io.now()
                 io.emit('R04D_MARKER_WRITE_STARTED', {
