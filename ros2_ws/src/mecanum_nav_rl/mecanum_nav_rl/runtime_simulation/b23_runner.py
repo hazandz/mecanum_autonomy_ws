@@ -7395,13 +7395,16 @@ class TrainingWorkerIO:
                 else:
                     zero_witness = await self.align_policy_step_launch_window(
                         deadline_ns=deadline, zero_witness=zero_witness,
-                        launch_window_ns=(70_000_000, 90_000_000),
-                        # Native applies the SAFE_STOP on a later physics
-                        # update and the status callback reaches this worker
-                        # after another measured 10-30 ms. Select the receipt
-                        # earlier in the same scan period so the unchanged
-                        # 70-90 ms application/bind window remains open.
-                        receipt_window_ns=(80_000_000, 99_000_000))
+                        # R08 evidence showed 125.3 ms from the last applied
+                        # SAFE_STOP publication to the next POLICY receipt:
+                        # bind ACK, a post-ACK noisy sample, then the first
+                        # Safety tick consumed the 70-90 ms phase and deferred
+                        # at the next scan cutoff. Select both the fresh zero
+                        # and bind at the beginning of one scan period, leaving
+                        # at least 90 ms for that unchanged transaction path.
+                        # No watchdog, freshness, or cutoff threshold changes.
+                        launch_window_ns=(90_000_000, 99_000_000),
+                        receipt_window_ns=(90_000_000, 99_000_000))
                 # The scan-window witness may already be several Safety ticks
                 # old by the time the ACK and first post-ACK sample arrive.
                 # R08 showed that a witness fresh at bind could age past the

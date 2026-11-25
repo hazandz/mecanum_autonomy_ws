@@ -7663,16 +7663,17 @@ def test_r02_close_fault_paths_align_receipt_window_before_pending_bind(close_af
     assert events == ['fresh_applied_zero', ('scan_alignment', expected_window), 'refresh_zero',
         ('stream_enabled', False), 'begin_pending_step']
 
-    # Ordinary POLICY also uses the earlier window because its measured
-    # ACK/admission path needs more than 60 ms before cutoff.
+    # Ordinary POLICY binds immediately after a fresh zero receipt at the
+    # start of a scan period, leaving the measured ACK/admission/tick path
+    # enough time before the unchanged cutoff and receipt watchdog.
     events.clear()
     class AlignmentReached(Exception):
         pass
     async def observe_alignment(*, deadline_ns, zero_witness,
-            launch_window_ns=(70_000_000, 90_000_000), receipt_window_ns=None):
+            launch_window_ns=(90_000_000, 99_000_000), receipt_window_ns=None):
         events.append('scan_alignment')
-        assert launch_window_ns == (70_000_000, 90_000_000)
-        assert receipt_window_ns == (80_000_000, 99_000_000)
+        assert launch_window_ns == (90_000_000, 99_000_000)
+        assert receipt_window_ns == (90_000_000, 99_000_000)
         raise AlignmentReached
     value.align_policy_step_launch_window = observe_alignment
     with pytest.raises(AlignmentReached):
@@ -7753,7 +7754,7 @@ def test_policy_step_orders_ack_sample_issue_safety_application_and_commit(timin
     async def aligned_window(*, deadline_ns, zero_witness, launch_window_ns,
             receipt_window_ns=None):
         history.append(('scan_alignment', deadline_ns))
-        assert launch_window_ns == (70_000_000, 90_000_000)
+        assert launch_window_ns == (90_000_000, 99_000_000)
         if timing == 'near_scan_cutoff':
             clock.ns = 1_070_000_000
         if timing == 'prebind_elapsed_deadline':
