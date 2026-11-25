@@ -18,6 +18,13 @@ struct ReceiptKey
   std::uint64_t publish_sequence{};
 };
 
+struct ReceiptQueueIdentity
+{
+  ReceiptKey key;
+  std::uint8_t source{};
+  std::uint64_t source_sequence{};
+};
+
 struct ReceiptFacts
 {
   std::string session_id;
@@ -105,6 +112,7 @@ public:
   bool ResetFenceHeld() const;
   bool QueueEmpty() const;
   std::optional<std::int64_t> FrontPolicyReceiveSteadyNs() const;
+  std::optional<ReceiptQueueIdentity> FrontReceiptIdentity() const;
   bool BindResetContext(std::int64_t barrier_stamp_ns,
                         std::uint64_t episode_generation,
                         std::uint32_t reset_epoch,

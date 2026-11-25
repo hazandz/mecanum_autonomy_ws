@@ -481,4 +481,10 @@ std::optional<std::int64_t> ReceiptGate::FrontPolicyReceiveSteadyNs() const
   if (queue_.empty() || queue_.front().facts.source != 1) return std::nullopt;
   return queue_.front().receive_steady_ns;
 }
+std::optional<ReceiptQueueIdentity> ReceiptGate::FrontReceiptIdentity() const
+{
+  if (queue_.empty()) return std::nullopt;
+  const auto &receipt = queue_.front().facts;
+  return ReceiptQueueIdentity{receipt.key, receipt.source, receipt.sequence};
+}
 }  // namespace mecanum_sim_backend

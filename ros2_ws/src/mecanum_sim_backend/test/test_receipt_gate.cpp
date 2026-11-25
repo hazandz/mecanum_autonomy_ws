@@ -166,6 +166,12 @@ TEST(ReceiptGate, UnseenOlderSequenceAfterSafeStopIsRejectedBeforeTimestampRollb
 
   auto late_policy = Policy();
   ASSERT_TRUE(gate.Enqueue(late_policy, 2'300));
+  const auto head = gate.FrontReceiptIdentity();
+  ASSERT_TRUE(head);
+  EXPECT_EQ(head->key.publisher_instance_id, late_policy.key.publisher_instance_id);
+  EXPECT_EQ(head->key.publish_sequence, late_policy.key.publish_sequence);
+  EXPECT_EQ(head->source, late_policy.source);
+  EXPECT_EQ(head->source_sequence, late_policy.sequence);
   const auto replay = gate.ConsumeNext(2'300, 2'300);
   EXPECT_EQ(replay.disposition, GateDisposition::Rejected);
   EXPECT_EQ(replay.reason, "replay_or_old_sequence");

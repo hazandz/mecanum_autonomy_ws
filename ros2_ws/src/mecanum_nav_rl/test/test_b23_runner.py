@@ -1022,15 +1022,14 @@ def test_worker_check_accepts_only_packet_pinned_fault_transition_set():
         worker.check(expected_native_fault_flags=(1, 7))
 
 
-@pytest.mark.parametrize('terminal_extra', [0, 256])
-def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_closed_zero(
-        terminal_extra):
-    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+def test_r02d_late_receipt_wait_requires_exact_old_sequence_gate_record(tmp_path):
     from mecanum_nav_rl.runtime_simulation.b23_runner import await_r02_late_receipt_close
 
     clock = {'steady_ns':100, 'pauses':0}
-    state = NS(fault_flags=SimulationContactState.FAULT_COMMAND_STALE,
-        local_zero_override=False)
+    state = NS(fault_flags=0, local_zero_override=False)
+    native = tmp_path/'native-events.jsonl'
+    native.write_text('')
+    receipt = NS(final_publish_sequence=52)
     worker = object.__new__(TrainingWorkerIO)
     worker.stop_requested = False
     worker.abort_requested = None
@@ -1049,27 +1048,20 @@ def test_r02_late_receipt_wait_tolerates_stale_intermediate_but_requires_exact_c
         clock['steady_ns'] += 10
         if clock['pauses'] == 1:
             release['observed'] = True
-        elif clock['pauses'] == 2 and terminal_extra:
-            state.fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
-                | SimulationContactState.FAULT_COMMAND_STALE)
-        elif clock['pauses'] == (3 if terminal_extra else 2):
-            state.fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
-                | SimulationContactState.FAULT_COMMAND_STALE | terminal_extra)
-            state.local_zero_override = True
+            native.write_text(json.dumps({'kind':'B23_RECEIPT_GATE_RESULT','fields':{
+                'disposition':'5','reason':'replay_or_old_sequence','key':'52','source':'1',
+                'source_sequence':'1','watermark':'53','steady_ns':'130'}})+'\n')
 
     worker.pause = pause
-    terminal_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
-        | SimulationContactState.FAULT_COMMAND_STALE)
+    worker.descriptor = {'native_events_path':str(native)}
     result = asyncio.run(await_r02_late_receipt_close(
-        worker, release_predicate=lambda: release['observed'], deadline_ns=900,
-        expected_terminal_fault_flags=(terminal_flags,
-            terminal_flags | SimulationContactState.FAULT_QUEUE)))
+        worker, release_predicate=lambda: release['observed'], receipt=receipt,
+        step_index=1, deadline_ns=900))
 
-    assert result is state
-    assert state.fault_flags == (SimulationContactState.FAULT_COMMAND_SEQUENCE
-        | SimulationContactState.FAULT_COMMAND_STALE | terminal_extra)
-    assert state.local_zero_override is True
-    assert clock['pauses'] == (3 if terminal_extra else 2)
+    assert result[0]['fields']['reason'] == 'replay_or_old_sequence'
+    assert result[0]['fields']['key'] == '52'
+    assert state.fault_flags == 0
+    assert clock['pauses'] == 1
 
 
 def test_r07c_owned_server_restart_scopes_expected_clock_stall():
@@ -9155,49 +9147,54 @@ def test_observation0_reanchor_keeps_real_b1_receipt_selection_within_500ms():
     assert events[-1][0] == 'RESET_COMPLETE'
 
 
-@pytest.mark.parametrize('case,reason,mode,fault_flags,queue_diag', [
-    ('R02d','admission_inhibited','hold_policy_until_inhibit',6,False),
-    ('R02d','admission_inhibited','hold_policy_until_inhibit',262,True)])
-def test_r02_late_policy_receipt_requires_native_close_and_fail_closed_evidence(
-        tmp_path, case, reason, mode, fault_flags, queue_diag):
+def test_r02d_late_policy_receipt_requires_exact_old_sequence_rejection_and_inhibited_zero(
+        tmp_path):
+    from mecanum_nav_rl.runtime_simulation.b23_runner import verify_r02_late_receipt_rejected
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     native=tmp_path/'native-events.jsonl'
     rows = [
-        ('B23_POLICY_RECEIPT_HELD',{'mode':mode,'sequence':'52','source_sequence':'1','receive_ns':'100'}),
-        ('B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE',{'reason':reason,'sequence':'52',
-            'source_sequence':'1','receive_ns':'200'})]
-    if queue_diag:
-        rows.append(('B23_NATIVE_OUTPUT_REJECTED', {'marker':'B23_QUEUE_FAULT',
-            'raw_text_sha256':'diagnostic-hash', 'reason':'event_marker_not_at_message_boundary',
-            'raw_record':{'event':'owned_process_output','facts':{'text':
-                '[Err] B23_QUEUE_FAULT cause=receipt_gate_release_after_inhibit receipt=held_policy'}}}))
-    native.write_text('\n'.join(json.dumps({'kind':kind,'fields':fields} if kind !=
-        'B23_NATIVE_OUTPUT_REJECTED' else {'kind':kind,'fields':{k:v for k,v in fields.items()
-            if k != 'raw_record'},'raw_record':fields['raw_record']}) for kind,fields in rows)+'\n')
+        {'kind':'B23_POLICY_RECEIPT_HELD','fields':{
+            'mode':'hold_policy_until_inhibit','sequence':'52','source_sequence':'1','receive_ns':'100'}},
+        {'kind':'B23_POLICY_RECEIPT_RELEASED_AFTER_CLOSE','fields':{
+            'reason':'admission_inhibited','sequence':'52','source_sequence':'1','receive_ns':'200'}},
+        {'kind':'B23_RECEIPT_GATE_RESULT','fields':{
+            'disposition':'5','reason':'replay_or_old_sequence','key':'52','source':'1',
+            'source_sequence':'1','watermark':'53','steady_ns':'300'}},]
+    native.write_text('\n'.join(json.dumps(row) for row in rows)+'\n')
     receipt=NS(final_publish_sequence=52,final_publisher_instance_id=81)
-    state=NS(fault_flags=fault_flags,
-        local_zero_override=True,applied_receipt_valid=False,
-        applied_final_publisher_instance_id=0,applied_final_publish_sequence=0)
-    io=NS(descriptor={'native_events_path':str(native)},ingress=NS(backend_state=state),events=[])
-    checked=verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
-    assert checked['release_reason'] == reason
+    safe_stop=NS(source=CommandEnvelope.SOURCE_SAFE_STOP,final_publish_sequence=53,
+        final_publisher_instance_id=81,final_command=NS(
+            linear=NS(x=0.0,y=0.0),angular=NS(z=0.0)))
+    state=NS(fault_flags=0,local_zero_override=False,actuator_inhibited=True,
+        applied_receipt_valid=True,applied_final_publisher_instance_id=81,
+        applied_final_publish_sequence=53)
+    io=NS(descriptor={'native_events_path':str(native)},
+        ingress=NS(backend_state=state,policy_application_for_receipt=lambda _r:None),events=[])
+    checked=verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,receipt=receipt,
+        safe_stop_receipt=safe_stop,safe_stop_application={'state':state,'received_ns':350})
+    assert checked['release_reason'] == 'admission_inhibited'
+    assert checked['native_rejection'] == 'replay_or_old_sequence'
     assert checked['policy_backend_applied'] is False
     assert checked['b1_transition_committed'] is False
-    state.local_zero_override=False
-    with pytest.raises(RuntimeError,match='native fault and zero'):
-        verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
-    state.local_zero_override=True
-    state.fault_flags=4
-    with pytest.raises(RuntimeError,match='native fault and zero'):
-        verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
-    if queue_diag:
-        state.fault_flags=262
-        rows[-1][1]['raw_record']['facts']['text'] = (
-            '[Err] B23_QUEUE_FAULT cause=unrelated_queue_fault receipt=held_policy')
-        native.write_text('\n'.join(json.dumps({'kind':kind,'fields':fields} if kind !=
-            'B23_NATIVE_OUTPUT_REJECTED' else {'kind':kind,'fields':{k:v for k,v in fields.items()
-                if k != 'raw_record'},'raw_record':fields['raw_record']}) for kind,fields in rows)+'\n')
-        with pytest.raises(RuntimeError,match='exact native held-receipt queue-fault evidence'):
-            verify_r02_late_receipt_rejected(io,case=case,step_index=1,receipt=receipt)
+    assert checked['safe_stop_final_publish_sequence'] == 53
+
+    wrong_sequence = dict(rows[2])
+    wrong_sequence['fields'] = {**rows[2]['fields'],'key':'54'}
+    native.write_text('\n'.join(json.dumps(row) for row in rows[:2]+[wrong_sequence])+'\n')
+    with pytest.raises(RuntimeError,match='exact native old-sequence rejection'):
+        verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,receipt=receipt,
+            safe_stop_receipt=safe_stop,safe_stop_application={'state':state,'received_ns':350})
+
+    native.write_text('\n'.join(json.dumps(row) for row in rows)+'\n')
+    state.actuator_inhibited=False
+    with pytest.raises(RuntimeError,match='inhibited zero'):
+        verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,receipt=receipt,
+            safe_stop_receipt=safe_stop,safe_stop_application={'state':state,'received_ns':350})
+    state.actuator_inhibited=True
+    io.ingress.policy_application_for_receipt=lambda _r:{'applied':True}
+    with pytest.raises(RuntimeError,match='backend application ledger'):
+        verify_r02_late_receipt_rejected(io,case='R02d',step_index=1,receipt=receipt,
+            safe_stop_receipt=safe_stop,safe_stop_application={'state':state,'received_ns':350})
 
 
 def test_r02c_safe_stop_close_requires_exact_inhibited_zero_and_canceled_policy(tmp_path):

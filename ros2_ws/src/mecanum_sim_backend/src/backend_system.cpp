@@ -921,20 +921,28 @@ public:
 
     TimedGateResult timed_decision;
     GateResult decision;
+    std::optional<ReceiptQueueIdentity> attempted_receipt;
     {
       std::lock_guard<std::mutex> lock(callback_mutex_);
+      attempted_receipt = gate_->FrontReceiptIdentity();
       timed_decision = gate_->ConsumeNextAtCurrentTime(
           now_sim, [this]() { return steady_clock_now_(); });
       decision = timed_decision.result;
       if (decision.disposition == GateDisposition::Pending ||
           decision.disposition == GateDisposition::Faulted ||
+          decision.disposition == GateDisposition::Rejected ||
           decision.disposition == GateDisposition::Anchored ||
           decision.disposition == GateDisposition::Applied)
       {
         const auto key = decision.accepted ?
-            decision.accepted->key.publish_sequence : 0;
+            decision.accepted->key.publish_sequence :
+            (attempted_receipt ? attempted_receipt->key.publish_sequence : 0);
         const auto source = decision.accepted ?
-            static_cast<unsigned>(decision.accepted->source) : 0;
+            static_cast<unsigned>(decision.accepted->source) :
+            (attempted_receipt ? static_cast<unsigned>(attempted_receipt->source) : 0);
+        const auto source_sequence = decision.accepted ?
+            decision.accepted->sequence :
+            (attempted_receipt ? attempted_receipt->source_sequence : 0);
         EmitStructuredDiagnostic([&]() {
           gzmsg << "B23_RECEIPT_GATE_RESULT disposition="
               << static_cast<unsigned>(decision.disposition)
@@ -943,7 +951,8 @@ public:
               << " steady_ns=" << timed_decision.steady_now_ns
               << " watermark=" << gate_->Watermark()
               << " next_safe_stop=" << gate_->ExpectedSafeStopSequence()
-              << " key=" << key << " source=" << source << std::endl;
+              << " key=" << key << " source=" << source
+              << " source_sequence=" << source_sequence << std::endl;
           std::fflush(stdout);
         });
       }

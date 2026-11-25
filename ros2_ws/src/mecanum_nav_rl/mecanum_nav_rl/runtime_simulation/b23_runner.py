@@ -2774,9 +2774,10 @@ async def await_r02g_exact_safe_stop_application(io, *, receipt, deadline_ns, ro
     return application
 
 
-def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
-    """Bind a delayed real POLICY receipt to close-before-release and native rejection."""
-    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt,
+        safe_stop_receipt, safe_stop_application):
+    """Bind the exact delayed POLICY rejection to the applied inhibited SAFE_STOP."""
+    from mecanum_nav_rl_interfaces.msg import CommandEnvelope
     if case != 'R02d':
         raise ValueError('fault-based delayed receipt verification is only valid for R02d')
     rows = [json.loads(line) for line in Path(io.descriptor['native_events_path'])
@@ -2794,35 +2795,38 @@ def verify_r02_late_receipt_rejected(io, *, case, step_index, receipt):
     release_ns = int(released[0]['fields']['receive_ns'])
     if release_ns < held_ns:
         raise RuntimeError(f'{case} release predates native receipt hold')
-    state = io.ingress.backend_state
-    expected_fault_flags = (SimulationContactState.FAULT_COMMAND_SEQUENCE
-        | SimulationContactState.FAULT_COMMAND_STALE)
-    if state is not None and state.fault_flags == (
-            expected_fault_flags | SimulationContactState.FAULT_QUEUE):
-        # This hook deliberately re-enqueues its held receipt after INHIBIT.
-        # The backend records that exact rejected release as FAULT_QUEUE in
-        # addition to the sequence/stale close fault. Bind the extra bit to
-        # the structured native diagnostic; never accept an arbitrary queue
-        # fault as the expected result.
-        expected_fault_flags |= SimulationContactState.FAULT_QUEUE
-        queue_fault_rows = r02d_held_receipt_queue_fault_rows(rows)
-        if len(queue_fault_rows) != 1:
-            raise RuntimeError('R02d lacks exact native held-receipt queue-fault evidence')
-    valid_fault_flags = {expected_fault_flags}
-    valid_fault_flags.add(expected_fault_flags | SimulationContactState.FAULT_QUEUE)
-    if (state is None or state.fault_flags not in valid_fault_flags
-            or not state.local_zero_override):
-        raise RuntimeError(f'{case} late POLICY receipt did not produce native fault and zero')
-    if (state.applied_receipt_valid and
-            state.applied_final_publisher_instance_id == receipt.final_publisher_instance_id and
-            state.applied_final_publish_sequence == receipt.final_publish_sequence):
-        raise RuntimeError(f'{case} late POLICY receipt was applied after close')
+    rejected = r02d_held_receipt_rejection_rows(rows, receipt=receipt,
+        step_index=step_index)
+    if len(rejected) != 1 or int(rejected[0]['fields']['steady_ns']) < release_ns:
+        raise RuntimeError(f'{case} lacks exact native old-sequence rejection after release')
+    if (safe_stop_receipt is None or safe_stop_application is None
+            or safe_stop_application.get('state') is None):
+        raise RuntimeError(f'{case} lacks exact applied closing SAFE_STOP evidence')
+    state = safe_stop_application['state']
+    if (safe_stop_receipt.source != CommandEnvelope.SOURCE_SAFE_STOP
+            or safe_stop_receipt.final_publish_sequence <= receipt.final_publish_sequence
+            or any((safe_stop_receipt.final_command.linear.x,
+                safe_stop_receipt.final_command.linear.y,
+                safe_stop_receipt.final_command.angular.z))
+            or not state.applied_receipt_valid
+            or state.applied_final_publisher_instance_id
+                != safe_stop_receipt.final_publisher_instance_id
+            or state.applied_final_publish_sequence
+                != safe_stop_receipt.final_publish_sequence
+            or state.fault_flags != 0 or state.local_zero_override
+            or not state.actuator_inhibited):
+        raise RuntimeError(f'{case} closing SAFE_STOP was not applied as an inhibited zero')
+    if io.ingress.policy_application_for_receipt(receipt) is not None:
+        raise RuntimeError(f'{case} late POLICY receipt appears in backend application ledger')
     if any(name == 'POLICY_STEP_COMPLETE' and facts.get('step_index') == step_index
            for name, facts in io.events):
         raise RuntimeError(f'{case} created a B1 commit for the canceled POLICY step')
     return {'case':case, 'held_final_publish_sequence':receipt.final_publish_sequence,
         'held_receive_ns':held_ns, 'release_receive_ns':release_ns, 'release_reason':reason,
-        'native_fault_flags':state.fault_flags, 'local_zero_override':True,
+        'native_rejection':rejected[0]['fields']['reason'],
+        'native_fault_flags':state.fault_flags, 'local_zero_override':False,
+        'safe_stop_final_publish_sequence':safe_stop_receipt.final_publish_sequence,
+        'safe_stop_applied_ns':safe_stop_application.get('received_ns'),
         'policy_backend_applied':False, 'b1_transition_committed':False}
 
 
@@ -2946,37 +2950,31 @@ def r02_held_policy_receipt_from_ledger(io, *, held_row, step_index, transition_
     return receipt
 
 
-def r02d_held_receipt_queue_fault_rows(rows):
-    """Select only raw native diagnostics for the packet-pinned R02d hook."""
+def r02d_held_receipt_rejection_rows(rows, *, receipt, step_index):
+    """Select the exact old-sequence rejection for R02d's held real receipt."""
     return [row for row in rows
-        if row.get('kind') == 'B23_NATIVE_OUTPUT_REJECTED'
-        and row.get('fields', {}).get('marker') == 'B23_QUEUE_FAULT'
-        and 'receipt_gate_release_after_inhibit' in str(
-            row.get('raw_record', {}).get('facts', {}).get('text', ''))
-        and 'receipt=held_policy' in str(
-            row.get('raw_record', {}).get('facts', {}).get('text', ''))]
+        if row.get('kind') == 'B23_RECEIPT_GATE_RESULT'
+        and row.get('fields', {}).get('disposition') == '5'
+        and row.get('fields', {}).get('reason') == 'replay_or_old_sequence'
+        and row.get('fields', {}).get('key') == str(receipt.final_publish_sequence)
+        and row.get('fields', {}).get('source') == '1'
+        and row.get('fields', {}).get('source_sequence') == str(step_index)
+        and int(row.get('fields', {}).get('watermark', '0'))
+            >= receipt.final_publish_sequence]
 
 
-async def await_r02_late_receipt_close(io, *, release_predicate, deadline_ns,
-        expected_terminal_fault_flags=None):
-    """Wait through observed close-fault states and require the packet-pinned terminal flags."""
-    from mecanum_nav_rl_interfaces.msg import SimulationContactState
-    stale = SimulationContactState.FAULT_COMMAND_STALE
-    sequence_stale = SimulationContactState.FAULT_COMMAND_SEQUENCE | stale
-    terminal_flags = ((sequence_stale,) if expected_terminal_fault_flags is None else
-        tuple(expected_terminal_fault_flags) if isinstance(expected_terminal_fault_flags,
-            (tuple,list,set,frozenset)) else (expected_terminal_fault_flags,))
-    allowed_transition = tuple(dict.fromkeys((stale, sequence_stale, *terminal_flags)))
+async def await_r02_late_receipt_close(io, *, release_predicate, receipt, step_index,
+        deadline_ns):
+    """Wait for exact late-receipt replay rejection after the close marker."""
     await io.until(release_predicate, deadline_ns=deadline_ns,
         phase='held POLICY receipt released only after closing condition',
-        expected_native_fault_flags=allowed_transition)
-    return await io.until(lambda: io.ingress.backend_state
-        if io.ingress.backend_state is not None
-        and io.ingress.backend_state.fault_flags in terminal_flags
-        and io.ingress.backend_state.local_zero_override else None,
+        expected_native_fault_flags=0)
+    return await io.until(lambda: r02d_held_receipt_rejection_rows(
+        complete_jsonl_rows(io.descriptor['native_events_path']),
+        receipt=receipt, step_index=step_index),
         deadline_ns=deadline_ns,
-        phase='native rejection and local zero after late POLICY receipt',
-        expected_native_fault_flags=allowed_transition)
+        phase='exact native old-sequence rejection after late POLICY receipt',
+        expected_native_fault_flags=0)
 
 
 async def await_r02_held_policy_receipt(io, *, held_predicate, deadline_ns):
@@ -7083,7 +7081,6 @@ class TrainingWorkerIO:
             self.safety.local_training.set_policy_hold(True)
             self.safety.local_training.set_stream_enabled(True)
             self.ingress.inhibit()
-            from mecanum_nav_rl_interfaces.msg import SimulationContactState
             expected_reason = close_after_held_receipt
             def released_row():
                 rows = complete_jsonl_rows(self.descriptor['native_events_path'])
@@ -7116,30 +7113,33 @@ class TrainingWorkerIO:
                     **checked, 'b1_abort_status':str(aborted.status), 'steady_ns':self.now()})
                 return {'expected_rejection':True, 'policy_issued':True, **checked,
                     'b1_step_aborted':True, 'transition_id':token.transition_id}
-            native_fault = await await_r02_late_receipt_close(
-                self, release_predicate=released_row, deadline_ns=deadline,
-                expected_terminal_fault_flags=(
-                    (SimulationContactState.FAULT_COMMAND_SEQUENCE
-                        | SimulationContactState.FAULT_COMMAND_STALE,
-                     SimulationContactState.FAULT_COMMAND_SEQUENCE
-                        | SimulationContactState.FAULT_COMMAND_STALE
-                        | SimulationContactState.FAULT_QUEUE)
-                    if close_after_held_receipt == 'admission_inhibited' else
-                    (SimulationContactState.FAULT_COMMAND_SEQUENCE
-                        | SimulationContactState.FAULT_COMMAND_STALE,)))
-            if (close_after_held_receipt == 'admission_inhibited'
-                    and native_fault.fault_flags & SimulationContactState.FAULT_QUEUE):
-                await self.until(lambda: r02d_held_receipt_queue_fault_rows(
-                    complete_jsonl_rows(self.descriptor['native_events_path'])),
-                    deadline_ns=deadline,
-                    phase='R02d exact native held-receipt queue-fault diagnostic',
-                    expected_native_fault_flags=native_fault.fault_flags)
-            checked = verify_r02_late_receipt_rejected(self, case=(
-                'R02c' if close_after_held_receipt == 'safe_stop' else 'R02d'),
-                step_index=token.step_index, receipt=policy_receipt)
+            await await_r02_late_receipt_close(self,
+                release_predicate=released_row, receipt=policy_receipt,
+                step_index=token.step_index, deadline_ns=deadline)
+            from mecanum_nav_rl_interfaces.msg import CommandEnvelope
+            closing_stop = await self.until(lambda: self.safety.local_training.last_output
+                if self.safety.local_training.last_output is not None
+                and self.safety.local_training.last_output.source
+                    == CommandEnvelope.SOURCE_SAFE_STOP
+                and self.safety.local_training.last_output.sequence
+                    > safe_stop_sequence_before_close else None,
+                deadline_ns=deadline, phase='R02d SAFE_STOP output after inhibited admission')
+            closing_stop_receipt = await self.until(lambda:
+                self.final.publication_for_source_sequence(
+                    source=CommandEnvelope.SOURCE_SAFE_STOP, sequence=closing_stop.sequence),
+                deadline_ns=deadline, phase='R02d exact closing SAFE_STOP receipt',
+                expected_native_fault_flags=0)
+            closing_stop_application = await self.until(lambda:
+                self.ingress.application_for_receipt(closing_stop_receipt),
+                deadline_ns=deadline, phase='R02d exact inhibited SAFE_STOP application',
+                expected_native_fault_flags=0)
+            checked = verify_r02_late_receipt_rejected(self, case='R02d',
+                step_index=token.step_index, receipt=policy_receipt,
+                safe_stop_receipt=closing_stop_receipt,
+                safe_stop_application=closing_stop_application)
             aborted = b1.lifecycle.abort_step('R02_late_policy_receipt_after_close')
             self.emit('R02_LATE_POLICY_RECEIPT_REJECTED', {
-                **checked, 'native_fault_flags':native_fault.fault_flags,
+                **checked,
                 'b1_abort_status':str(aborted.status), 'steady_ns':self.now()})
             return {'expected_rejection':True, 'policy_issued':True, **checked,
                 'b1_step_aborted':True, 'transition_id':token.transition_id}
