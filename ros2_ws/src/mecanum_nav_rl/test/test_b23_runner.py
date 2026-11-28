@@ -671,12 +671,20 @@ def test_worker_safety_timer_executor_runs_independently_and_joins():
             pass
 
     class MainExecutor:
-        def spin_once(self, *, timeout_sec):
-            observed['main_thread'] = threading.current_thread().name
+        def wait_for_ready_callbacks(self, *, timeout_sec):
+            from rclpy.executors import TimeoutException
+            if 'main_thread' in observed:
+                raise TimeoutException()
             observed['main_timeout'] = timeout_sec
             assert safety_started.wait(0.5), 'Safety executor did not start independently'
-            worker.stop_requested = True
-            worker.worker_executor_stop.set()
+            class Handler:
+                def __call__(self):
+                    observed['main_thread'] = threading.current_thread().name
+                    worker.stop_requested = True
+                    worker.worker_executor_stop.set()
+                def exception(self): return None
+                def result(self): return None
+            return Handler(), None, None
 
         def shutdown(self, timeout_sec):
             observed['main_shutdown_timeout'] = timeout_sec
@@ -6371,22 +6379,35 @@ def test_worker_orchestration_pump_does_not_own_ros_executor_spin():
 
 
 def test_worker_executor_spin_runs_until_owned_stop_and_propagates_failure():
+    from rclpy.executors import TimeoutException
     stop = threading.Event()
-    calls, yields = [], []
+    callbacks, waits, yields = [], [], []
+
+    class Handler:
+        def __call__(self):
+            callbacks.append(len(callbacks) + 1)
+            if len(callbacks) == 3:
+                stop.set()
+        def exception(self): return None
+        def result(self): return None
 
     class FakeExecutor:
-        def spin_once(self, *, timeout_sec):
-            calls.append(timeout_sec)
-            if len(calls) == 3:
-                stop.set()
+        def __init__(self):
+            self.ready = [Handler() for _ in range(3)]
+        def wait_for_ready_callbacks(self, *, timeout_sec):
+            waits.append(timeout_sec)
+            if self.ready:
+                return self.ready.pop(0), None, None
+            raise TimeoutException()
 
     spin_worker_executor_until_stopped(FakeExecutor(), stop,
         timeout_s=0.002, yield_fn=lambda duration: yields.append(duration))
-    assert calls == [0.002, 0.002, 0.002]
-    assert yields == [0, 0, 0]
+    assert callbacks == [1, 2, 3]
+    assert waits == [0.002, 0., 0., 0.]
+    assert yields == [0]
 
     class FailedExecutor:
-        def spin_once(self, *, timeout_sec):
+        def wait_for_ready_callbacks(self, *, timeout_sec):
             raise RuntimeError('worker executor fake failure')
 
     with pytest.raises(RuntimeError, match='worker executor fake failure'):

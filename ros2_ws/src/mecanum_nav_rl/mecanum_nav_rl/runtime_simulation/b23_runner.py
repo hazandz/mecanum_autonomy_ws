@@ -3846,7 +3846,7 @@ def spin_receipt_executor_until_stopped(executor, stop_event, *, timeout_s=0.01)
 def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
                               budget_ns=WORKER_CALLBACK_BATCH_BUDGET_NS,
                               max_callbacks=WORKER_CALLBACK_BATCH_MAX,
-                              diagnostics=None):
+                              diagnostics=None, wait_timeout_s=0.):
     """Run ready callbacks through rclpy's public custom-executor seam.
 
     The one-callback pump could not keep up with the concurrent 100 Hz backend
@@ -3856,8 +3856,10 @@ def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
     """
     from rclpy.executors import TimeoutException
     if (type(budget_ns) is not int or budget_ns <= 0
-            or type(max_callbacks) is not int or max_callbacks <= 0):
-        raise ValueError('worker callback batch limits must be positive integers')
+            or type(max_callbacks) is not int or max_callbacks <= 0
+            or type(wait_timeout_s) not in (int, float)
+            or not math.isfinite(wait_timeout_s) or wait_timeout_s < 0):
+        raise ValueError('worker callback batch limits or wait timeout are invalid')
     started_ns = now_ns()
     count = 0
     while count < max_callbacks:
@@ -3865,7 +3867,8 @@ def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
             break
         wait_started_ns = now_ns()
         try:
-            handler, entity, node = executor.wait_for_ready_callbacks(timeout_sec=0.)
+            handler, entity, node = executor.wait_for_ready_callbacks(
+                timeout_sec=float(wait_timeout_s) if count == 0 else 0.)
         except TimeoutException:
             if diagnostics is not None:
                 elapsed = now_ns() - wait_started_ns
@@ -3900,16 +3903,18 @@ def spin_ready_callback_batch(executor, *, now_ns=time.monotonic_ns,
 def spin_worker_executor_until_stopped(executor, stop_event, *, timeout_s=WORKER_EXECUTOR_WAIT_S,
                                        yield_fn=time.sleep):
     """Keep high-rate worker ingress moving independently of orchestration awaits."""
-    if not callable(getattr(executor, 'spin_once', None)):
-        raise TypeError('worker executor must provide spin_once')
+    if not callable(getattr(executor, 'wait_for_ready_callbacks', None)):
+        raise TypeError('worker executor must provide wait_for_ready_callbacks')
     if not callable(getattr(stop_event, 'is_set', None)):
         raise TypeError('worker executor stop event is invalid')
     if type(timeout_s) not in (int, float) or not math.isfinite(timeout_s) or timeout_s <= 0:
         raise ValueError('worker executor timeout must be finite and positive')
     while not stop_event.is_set():
-        executor.spin_once(timeout_sec=float(timeout_s))
-        # Yield the GIL between callbacks so the orchestration, Safety and
-        # receipt executors retain their own deadline checks.
+        # Drain a bounded batch on the dedicated ingress thread. A one-callback
+        # spin_once cycle fell behind the exact 100 Hz oracle/status join and
+        # the worker's RMW reader reported message loss. Batch draining remains
+        # bounded so orchestration, Safety and receipt executors can progress.
+        spin_ready_callback_batch(executor, wait_timeout_s=float(timeout_s))
         yield_fn(0)
 
 
