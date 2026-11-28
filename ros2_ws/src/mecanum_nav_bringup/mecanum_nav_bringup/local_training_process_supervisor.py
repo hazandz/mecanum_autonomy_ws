@@ -3745,12 +3745,15 @@ class LocalTrainingProcessSupervisor:
             self._record_runtime_event('heartbeat_trace_collection', facts)
 
     def archive_heartbeat_trace_files(self, *, deadline_ns: int) -> list[dict]:
-        """Copy closed mmap traces from fast local staging to evidence storage.
+        """Losslessly gzip closed mmap traces into evidence storage.
 
         The Gazebo callback must not page-fault heartbeat records against a
         removable/slow evidence filesystem. This runs only after owned writers
-        have stopped; the archive is byte-checked before it is reported.
+        have stopped. Each gzip archive is verified by streaming its decoded
+        bytes against the original size and SHA-256 before it is reported.
         """
+        import gzip
+
         if not self.heartbeat_diagnostics_enabled:
             return []
         if self.heartbeat_trace_archive_directory is None:
@@ -3787,7 +3790,7 @@ class LocalTrainingProcessSupervisor:
                     or source_stat.st_ino != entry['inode']
                     or source_stat.st_size != entry['size']):
                 raise RuntimeError('heartbeat_trace_source_identity_changed')
-            destination = archive / relative
+            destination = archive / relative.parent / (relative.name + '.gz')
             destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             parent_stat = destination.parent.stat(follow_symlinks=False)
             if (not destination.parent.is_dir()
@@ -3795,7 +3798,7 @@ class LocalTrainingProcessSupervisor:
                     or (parent_stat.st_mode & 0o777) != 0o700):
                 raise RuntimeError('heartbeat_trace_archive_parent_invalid')
             source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-            digest = hashlib.sha256()
+            source_digest = hashlib.sha256()
             copied = 0
             destination_fd = None
             try:
@@ -3805,27 +3808,29 @@ class LocalTrainingProcessSupervisor:
                     0o600,
                 )
                 os.fchmod(destination_fd, 0o600)
-                while True:
-                    if time.monotonic_ns() >= deadline_ns:
-                        raise TimeoutError('heartbeat_trace_archive_deadline')
-                    block = os.read(source_fd, 1024 * 1024)
-                    if not block:
-                        break
-                    digest.update(block)
-                    view = memoryview(block)
-                    while view:
-                        written = os.write(destination_fd, view)
-                        if written <= 0:
-                            raise OSError('heartbeat_trace_archive_short_write')
-                        view = view[written:]
-                    copied += len(block)
+                with os.fdopen(os.dup(destination_fd), 'wb') as archive_file:
+                    with gzip.GzipFile(
+                            filename='', mode='wb', fileobj=archive_file,
+                            compresslevel=6, mtime=0) as compressed:
+                        while True:
+                            if time.monotonic_ns() >= deadline_ns:
+                                raise TimeoutError('heartbeat_trace_archive_deadline')
+                            block = os.read(source_fd, 1024 * 1024)
+                            if not block:
+                                break
+                            source_digest.update(block)
+                            compressed.write(block)
+                            copied += len(block)
+                    archive_file.flush()
+                if time.monotonic_ns() >= deadline_ns:
+                    raise TimeoutError('heartbeat_trace_archive_deadline')
                 os.fsync(destination_fd)
             finally:
                 if destination_fd is not None:
                     os.close(destination_fd)
                 os.close(source_fd)
             target_stat = destination.stat(follow_symlinks=False)
-            target_hash = hashlib.sha256()
+            archive_digest = hashlib.sha256()
             with destination.open('rb') as target_file:
                 while True:
                     if time.monotonic_ns() >= deadline_ns:
@@ -3833,13 +3838,23 @@ class LocalTrainingProcessSupervisor:
                     block = target_file.read(1024 * 1024)
                     if not block:
                         break
-                    target_hash.update(block)
-            target_digest = target_hash.hexdigest()
-            source_digest = digest.hexdigest()
-            if (copied != source_stat.st_size or target_stat.st_size != copied
+                    archive_digest.update(block)
+            restored_digest = hashlib.sha256()
+            restored_size = 0
+            with gzip.open(destination, 'rb') as compressed_file:
+                while True:
+                    if time.monotonic_ns() >= deadline_ns:
+                        raise TimeoutError('heartbeat_trace_archive_verify_deadline')
+                    block = compressed_file.read(1024 * 1024)
+                    if not block:
+                        break
+                    restored_digest.update(block)
+                    restored_size += len(block)
+            source_sha256 = source_digest.hexdigest()
+            if (copied != source_stat.st_size or restored_size != copied
                     or target_stat.st_uid != os.geteuid()
                     or (target_stat.st_mode & 0o777) != 0o600
-                    or target_digest != source_digest):
+                    or restored_digest.hexdigest() != source_sha256):
                 raise RuntimeError('heartbeat_trace_archive_verification_failed')
             rows.append({
                 'role': entry['role'],
@@ -3849,8 +3864,11 @@ class LocalTrainingProcessSupervisor:
                 'archive_path': str(destination),
                 'archive_device': target_stat.st_dev,
                 'archive_inode': target_stat.st_ino,
+                'archive_encoding': 'gzip',
+                'archive_size': target_stat.st_size,
+                'archive_sha256': archive_digest.hexdigest(),
                 'size': copied,
-                'sha256': source_digest,
+                'sha256': source_sha256,
                 'verified_ns': time.monotonic_ns(),
             })
         return rows

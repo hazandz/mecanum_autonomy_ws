@@ -633,13 +633,16 @@ async def _start_fake_observer(supervisor):
     await supervisor._bind_heartbeat_readiness()
 
 
-def test_heartbeat_trace_archive_copies_closed_stage_bytes_and_hash(tmp_path):
-    """Trace staging stays local during runtime; archive copy is byte-bound."""
+def test_heartbeat_trace_archive_gzips_closed_stage_bytes_losslessly(tmp_path):
+    """Trace staging stays local; gzip archive restores the exact source bytes."""
+    import gzip
+
     stage = tmp_path/'stage'
     archive = tmp_path/'archive'
     stage.mkdir(mode=0o700)
     archive.mkdir(mode=0o700)
-    source = stage/'backend.hbtrace'
+    source = stage/'segment-0'/'backend.hbtrace'
+    source.parent.mkdir(mode=0o700)
     raw = bytes(range(256)) * 1024
     source.write_bytes(raw)
     source.chmod(0o600)
@@ -665,11 +668,16 @@ def test_heartbeat_trace_archive_copies_closed_stage_bytes_and_hash(tmp_path):
     rows = supervisor.archive_heartbeat_trace_files(
         deadline_ns=__import__('time').monotonic_ns()+2_000_000_000)
 
-    target = archive/'backend.hbtrace'
-    assert target.read_bytes() == raw
+    target = archive/'segment-0'/'backend.hbtrace.gz'
+    assert gzip.decompress(target.read_bytes()) == raw
     assert len(rows) == 1
     assert rows[0]['archive_path'] == str(target)
     assert rows[0]['sha256'] == hashlib.sha256(raw).hexdigest()
+    assert rows[0]['archive_encoding'] == 'gzip'
+    assert rows[0]['size'] == len(raw)
+    assert rows[0]['archive_size'] == target.stat().st_size
+    assert rows[0]['archive_sha256'] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert rows[0]['archive_size'] < rows[0]['size'] // 10
     assert rows[0]['staged_device'] == identity.st_dev
     assert rows[0]['staged_inode'] == identity.st_ino
 
