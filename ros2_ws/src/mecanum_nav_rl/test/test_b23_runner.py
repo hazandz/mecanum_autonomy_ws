@@ -9497,6 +9497,122 @@ def test_reset_measurements_wait_for_scan_with_original_deadline():
     assert clock.ns==1_005_000_000
 
 
+def test_reset_measurements_start_after_fresh_scan_watermark_not_stale_backlog():
+    from nav_msgs.msg import Odometry
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from rclpy.serialization import serialize_message
+
+    class Clock:
+        def __init__(self): self.steady=10_000_000_000; self.ros=1_100_000_000
+    clock=Clock()
+    value=TrainingWorkerIO.__new__(TrainingWorkerIO)
+    value.now=lambda:clock.steady
+    value.ros_now=lambda:clock.ros
+    value.deadline_ns=clock.steady+2_000_000_000
+    value.stop_requested=False; value.abort_requested=None; value.pump_error=None
+    value.expected_paused=False; value.last_clock_ns=clock.ros
+    value.last_clock_advance_ns=clock.steady
+    value.fault_hooks=()
+    value._r06b_measurement_fault=None
+    value.ingress=NS(fault=None,backend_state=None,lifecycle=NS(
+        barrier_stamp=NS(sec=1,nanosec=0)),scan_reset_stamp_ns=1_000_000_000,
+        profile={'scan_max_age_ms':250,'reset_footprint_clearance_expansion_m':0.0},scans={})
+    value.events=[]
+    value.emit=lambda event,facts:value.events.append((event,facts))
+    value.scan_clearance=lambda **_kwargs:2.0  # TF/scan geometry is an I/O boundary here.
+
+    def pair(iteration, stamp_ns, received_ns):
+        oracle=Odometry(); oracle.header.frame_id='world'; oracle.child_frame_id='base_link'
+        oracle.header.stamp.sec,oracle.header.stamp.nanosec=divmod(stamp_ns,1_000_000_000)
+        oracle.pose.pose.position.z=0.066; oracle.pose.pose.orientation.w=1.0
+        status=SimulationContactState(); status.header.frame_id='b2_training_arena'
+        status.header.stamp.sec,status.header.stamp.nanosec=divmod(stamp_ns,1_000_000_000)
+        status.session_id='reset-scan-test'; status.config_hash='a'*64
+        status.backend_instance_id=9; status.reset_epoch=1
+        status.episode_generation=1; status.runtime_generation=1
+        status.physics_iteration=iteration; status.contact_source_healthy=True
+        status.coverage_complete=True; status.required_collision_mask=1
+        status.observed_collision_mask=1
+        return NS(iteration=iteration,stamp_ns=stamp_ns,
+            oracle_bytes=serialize_message(oracle),backend_bytes=serialize_message(status),
+            oracle_received_steady_ns=received_ns,backend_received_steady_ns=received_ns)
+
+    # These exact pairs accumulated while the reset waited for a fresh scan.
+    value.ingress.physics_pairs=[pair(i,1_000_000_000+i*10_000_000,clock.steady-1_000_000_000)
+        for i in range(1,11)]
+    scan=NS(stamp_ns=1_050_000_000,received_steady_ns=clock.steady,message_bytes=b'scan')
+    value.ingress.scans[1_050_000_000]=scan
+    produced=[]
+    async def pause(seconds):
+        clock.steady+=round(seconds*1_000_000_000)
+        clock.ros+=round(seconds*1_000_000_000)
+        if len(produced)<21:
+            iteration=11+len(produced)
+            produced.append(pair(iteration,1_100_000_000+len(produced)*10_000_000,clock.steady))
+            value.ingress.physics_pairs.append(produced[-1])
+    value.pause=pause
+
+    async def collect():
+        samples=[]
+        async for sample in value.measurements(
+                deadline_ns=value.deadline_ns,after_iteration=0):
+            samples.append(sample)
+            if len(samples)==21: break
+        return samples
+
+    samples=asyncio.run(collect())
+    assert [sample.iteration for sample in samples]==list(range(11,32))
+    assert samples[0].oracle_receive_steady_ns==samples[0].receive_steady_ns
+    assert all(clock.steady-s.oracle_receive_steady_ns<=250_000_000 for s in samples)
+    assert [s.stamp_ns for s in samples]==list(range(1_100_000_000,1_310_000_000,10_000_000))
+    event=dict(value.events)['RESET_PHYSICS_BASELINE_AFTER_SCAN']
+    assert event['scan_stamp_ns']==1_050_000_000
+    assert event['latest_pre_window_iteration']==10
+    assert event['discarded_pair_count']==10
+
+
+def test_reset_measurements_do_not_fall_back_to_stale_pairs_if_fresh_pair_absent():
+    from nav_msgs.msg import Odometry
+    from mecanum_nav_rl_interfaces.msg import SimulationContactState
+    from rclpy.serialization import serialize_message
+
+    clock=NS(steady=10_000_000_000,ros=1_100_000_000)
+    value=TrainingWorkerIO.__new__(TrainingWorkerIO)
+    value.now=lambda:clock.steady; value.ros_now=lambda:clock.ros
+    value.deadline_ns=clock.steady+20_000_000
+    value.stop_requested=False; value.abort_requested=None; value.pump_error=None
+    value.expected_paused=False; value.last_clock_ns=clock.ros
+    value.last_clock_advance_ns=clock.steady
+    value.ingress=NS(fault=None,backend_state=None,lifecycle=NS(
+        barrier_stamp=NS(sec=1,nanosec=0)),scan_reset_stamp_ns=1_000_000_000,
+        profile={'scan_max_age_ms':250,'reset_footprint_clearance_expansion_m':0.0},scans={})
+    value.emit=lambda _event,_facts:None
+    value.scan_clearance=lambda **_kwargs:2.0
+    pairs=[]
+    for i in range(1,11):
+        oracle=Odometry(); oracle.header.frame_id='world'; oracle.child_frame_id='base_link'
+        stamp=1_000_000_000+i*10_000_000
+        oracle.header.stamp.sec,oracle.header.stamp.nanosec=divmod(stamp,1_000_000_000)
+        status=SimulationContactState(); status.header.frame_id='b2_training_arena'
+        status.header.stamp=oracle.header.stamp; status.physics_iteration=i
+        status.session_id='reset-scan-test'; status.config_hash='a'*64; status.backend_instance_id=9
+        status.reset_epoch=1; status.episode_generation=1; status.runtime_generation=1
+        pairs.append(NS(iteration=i,stamp_ns=stamp,oracle_bytes=serialize_message(oracle),
+            backend_bytes=serialize_message(status),oracle_received_steady_ns=clock.steady-1_000_000_000,
+            backend_received_steady_ns=clock.steady-1_000_000_000))
+    value.ingress.physics_pairs=pairs
+    value.ingress.scans[1_050_000_000]=NS(stamp_ns=1_050_000_000,
+        received_steady_ns=clock.steady,message_bytes=b'scan')
+    async def pause(seconds):
+        clock.steady+=round(seconds*1_000_000_000); clock.ros+=round(seconds*1_000_000_000)
+    value.pause=pause
+    async def consume():
+        async for _ in value.measurements(deadline_ns=value.deadline_ns,after_iteration=0):
+            pytest.fail('stale buffered physics pair must not be used')
+    with pytest.raises(TimeoutError,match='fresh reset physics pair'):
+        asyncio.run(consume())
+
+
 def test_reset_scan_rejects_old_delayed_and_stale_samples():
     value,clock=worker()
     value.ingress.lifecycle=NS(barrier_stamp=NS(sec=1,nanosec=0))

@@ -6328,8 +6328,28 @@ class TrainingWorkerIO:
         from mecanum_nav_rl.runtime_simulation.local_training_ingress import quaternion_rpy
         last = after_iteration
         # Sau reset_noise, buffer scan rỗng; đợi mẫu thật trong deadline gốc.
-        await self.until(lambda: self.fresh_reset_scan(now_ros_ns=self.ros_now(), now_steady_ns=self.now()),
+        reset_scan = await self.until(
+            lambda: self.fresh_reset_scan(
+                now_ros_ns=self.ros_now(), now_steady_ns=self.now()),
             deadline_ns=deadline_ns, phase='fresh reset scan')
+        # Physics pairs can accumulate while waiting for the first valid
+        # post-reset scan. Starting at the oldest buffered pair makes the
+        # standstill consumer lag behind simulation time and can age oracle
+        # evidence past the unchanged 250 ms limit. Establish a watermark at
+        # the latest pair observed after the scan; the measured window then
+        # starts with the next exact pair and still rejects gaps/stale input.
+        pre_window_pairs = ingress_physics_pair_snapshot(self.ingress)
+        latest_pre_window_iteration = max(
+            (value.iteration for value in pre_window_pairs), default=last)
+        last = max(last, latest_pre_window_iteration)
+        self.emit('RESET_PHYSICS_BASELINE_AFTER_SCAN', {
+            'scan_stamp_ns': int(reset_scan.stamp_ns),
+            'scan_received_steady_ns': int(reset_scan.received_steady_ns),
+            'after_iteration': int(after_iteration),
+            'latest_pre_window_iteration': int(latest_pre_window_iteration),
+            'discarded_pair_count': len(pre_window_pairs),
+            'steady_ns': self.now(),
+        })
         while self.now() < deadline_ns:
             pair = await self.until(lambda: next((value for value in ingress_physics_pair_snapshot(self.ingress)
                 if value.iteration > last), None), deadline_ns=deadline_ns, phase='fresh reset physics pair')
